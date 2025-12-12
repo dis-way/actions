@@ -51,6 +51,14 @@ inputs:
     description: GitHub Token
     required: true
 
+outputs:
+  plan_step_exitcode:
+    description: "Exit code from terraform plan step"
+    value: ${{ steps.plan.outputs.exitcode }}
+  plan_step_outcome:
+    description: "Outcome from terraform plan step"
+    value: ${{ steps.plan.outcome }}
+
 runs:
   using: composite
   steps:
@@ -82,10 +90,10 @@ runs:
       if: always()
       working-directory: ${{ inputs.working_directory }}
       run: |
-        set -o pipefail
+        set -euo pipefail
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
         EC=$?
-        cat tfplan.log
+        echo "exitcode=$EC" >> $GITHUB_OUTPUT
         exit $EC
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
@@ -98,6 +106,7 @@ runs:
       id: artifact_key
       shell: bash
       run: |
+        set -euo pipefail
         ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
         echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
 
@@ -124,3 +133,5 @@ runs:
 
         PLAN_STEP_EXITCODE: ${{ steps.plan.outputs.exitcode }}
         PLAN_STEP_OUTCOME: ${{ steps.plan.outcome }}
+        TF_BACKEND_STATE_NAME: ${{ inputs.tf_backend_state_name }}
+        ARTIFACT_KEY: ${{ env.ARTIFACT_KEY }}

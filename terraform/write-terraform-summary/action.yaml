@@ -20,9 +20,47 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Validate required environment variables
+      shell: bash
+      run: |
+        set -euo pipefail
+        missing_vars=()
+
+        if [ -z "${VALIDATE_STEP_OUTPUT:-}" ]; then
+          missing_vars+=("VALIDATE_STEP_OUTPUT")
+        fi
+        if [ -z "${VALIDATE_STEP_OUTCOME:-}" ]; then
+          missing_vars+=("VALIDATE_STEP_OUTCOME")
+        fi
+        if [ -z "${INIT_STEP_OUTPUT:-}" ]; then
+          missing_vars+=("INIT_STEP_OUTPUT")
+        fi
+        if [ -z "${INIT_STEP_OUTCOME:-}" ]; then
+          missing_vars+=("INIT_STEP_OUTCOME")
+        fi
+        if [ -z "${PLAN_STEP_OUTCOME:-}" ]; then
+          missing_vars+=("PLAN_STEP_OUTCOME")
+        fi
+
+        if [ ${#missing_vars[@]} -gt 0 ]; then
+          echo "Warning: The following environment variables are not set:" >&2
+          printf '%s\n' "${missing_vars[@]}" >&2
+          echo "Summary may be incomplete. Setting defaults to 'unknown'." >&2
+
+          # Set defaults for missing variables
+          [ -z "${VALIDATE_STEP_OUTPUT:-}" ] && echo "VALIDATE_STEP_OUTPUT=Not available" >> $GITHUB_ENV
+          [ -z "${VALIDATE_STEP_OUTCOME:-}" ] && echo "VALIDATE_STEP_OUTCOME=unknown" >> $GITHUB_ENV
+          [ -z "${INIT_STEP_OUTPUT:-}" ] && echo "INIT_STEP_OUTPUT=Not available" >> $GITHUB_ENV
+          [ -z "${INIT_STEP_OUTCOME:-}" ] && echo "INIT_STEP_OUTCOME=unknown" >> $GITHUB_ENV
+          [ -z "${PLAN_STEP_OUTCOME:-}" ] && echo "PLAN_STEP_OUTCOME=unknown" >> $GITHUB_ENV
+          [ -z "${PLAN_STEP_EXITCODE:-}" ] && echo "PLAN_STEP_EXITCODE=0" >> $GITHUB_ENV
+        fi
+
     - name: generate random delimiter
       shell: bash
-      run: echo "DELIMITER=$(uuidgen)" >> $GITHUB_ENV
+      run: |
+        set -euo pipefail
+        echo "DELIMITER=$(uuidgen)" >> $GITHUB_ENV
 
     - name: truncate terraform plan result
       shell: bash
@@ -30,6 +68,7 @@ runs:
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
         DELIMITER: ${{ env.DELIMITER }}
       run: |
+        set -euo pipefail
         if [ -f "$WORKING_DIRECTORY/tfplan.log" ]; then
           plan=$(cat $WORKING_DIRECTORY/tfplan.log)
         else
@@ -107,7 +146,9 @@ runs:
       if: always()
       shell: bash
       working-directory: ${{ inputs.working_directory }}
-      run: cat summary.md >> $GITHUB_STEP_SUMMARY
+      run: |
+        set -euo pipefail
+        cat summary.md >> $GITHUB_STEP_SUMMARY
 
     - name: GitHub Issue
       id: issue_number

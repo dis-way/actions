@@ -84,6 +84,7 @@ runs:
       env:
         TERRAFORM_LOG_LEVEL: ${{ inputs.tf_log_level }}
       run: |
+        set -euo pipefail
         SAFE_TERRAFORM_LOG_LEVEL=$(echo "${TERRAFORM_LOG_LEVEL:-INFO}" | tr -d '\n')
         echo "TF_LOG=$SAFE_TERRAFORM_LOG_LEVEL" >> "$GITHUB_ENV"
 
@@ -92,12 +93,12 @@ runs:
       env:
         TERRAFORM_STATE_NAME: ${{ inputs.tf_backend_state_name }}
       run: |
+        set -euo pipefail
         echo "TF_STATE_FILE=$TERRAFORM_STATE_NAME" >> $GITHUB_ENV
 
     - name: Terraform Init
       id: init
       shell: bash
-      if: always()
       working-directory: ${{ inputs.working_directory }}
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
@@ -107,6 +108,7 @@ runs:
         TERRAFORM_STORAGE_ACCOUNT_NAME: ${{ inputs.tf_backend_storage_account_name }}
         TERRAFORM_RESOURCE_GROUP_NAME: ${{ inputs.tf_backend_resource_group_name }}
       run: |
+        set -euo pipefail
         terraform init -input=false \
           -backend-config="use_oidc=true" \
           -backend-config="use_azuread_auth=true" \
@@ -120,8 +122,8 @@ runs:
     - name: Terraform Validate
       id: validate
       shell: bash
-      if: always()
       working-directory: ${{ inputs.working_directory }}
       run: |
+        set -euo pipefail
         terraform version
         terraform validate -no-color

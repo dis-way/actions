@@ -33,6 +33,7 @@ runs:
       id: artifact_key
       shell: bash
       run: |
+        set -euo pipefail
         ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
         echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
 
@@ -46,6 +47,7 @@ runs:
     - name: Validate Plan File
       shell: bash
       run: |
+        set -euo pipefail
         if [ ! -f "${{ inputs.working_directory }}/tfplan.out" ]; then
           echo "Error: Plan file tfplan.out not found in ${{ inputs.working_directory }}"
           exit 1
@@ -56,10 +58,11 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       shell: bash
       run: |
+        set -euo pipefail
         echo "Applying Terraform plan..."
         terraform apply -input=false -auto-approve $TERRAFORM_ARGS tfplan.out
         echo "Capturing Terraform outputs..."
-        terraform output -json >> $TERRAFORM_OUTPUT_FILE
+        terraform output -json > $TERRAFORM_OUTPUT_FILE
         echo "Terraform apply completed successfully"
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}

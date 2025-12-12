@@ -40,7 +40,7 @@ runs:
       if: always()
       working-directory: ${{ inputs.working_directory }}
       run: |
-        set -o pipefail
+        set -euo pipefail
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
         EC=$?
         cat tfplan.log
@@ -56,6 +56,7 @@ runs:
       id: artifact_key
       shell: bash
       run: |
+        set -euo pipefail
         ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
         echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
 

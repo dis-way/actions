@@ -21,7 +21,7 @@ jobs:
           oidc_value: ${{ env.ENVIRONMENT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}
           arm_subscription_id: ${{ env.ARM_SUBSCRIPTION_ID }}
-          tf_state_name: ${{ env.TF_STATE_NAME }}
+          tf_backend_state_name: ${{ env.TF_STATE_NAME }}
           gh_token: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
@@ -41,6 +41,6 @@ jobs:
           oidc_value: ${{ env.ENVIRONMENT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}
           arm_subscription_id: ${{ env.ARM_SUBSCRIPTION_ID }}
-          tf_state_name: ${{ env.TF_STATE_NAME }}
+          tf_backend_state_name: ${{ env.TF_STATE_NAME }}
 
 ```
