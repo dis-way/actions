@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
       ...
       - name: Terraform Init
-        uses: Altinn/altinn-platform/actions/terraform/init@main
+        uses: dis-way/actions/terraform/init@609da8c99ce0ed770db0fb85be3620153f165527
         with:
           ...
       - name: Get something from Terraform output
@@ -23,7 +23,7 @@ jobs:
           echo "SOMETHING=$(terraform output -raw something)" >> "$GITHUB_OUTPUT"
       ...
       - name: Terraform Plan
-        uses: Altinn/altinn-platform/actions/terraform/plan-only@main
+        uses: dis-way/actions/terraform/plan-only@609da8c99ce0ed770db0fb85be3620153f165527
         with:
           working_directory: ${{ env.TF_PROJECT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}

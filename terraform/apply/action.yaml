@@ -47,7 +47,7 @@ runs:
   using: composite
   steps:
     - name: Terraform Init
-      uses: Altinn/altinn-platform/actions/terraform/init@main
+      uses: dis-way/actions/terraform/init@609da8c99ce0ed770db0fb85be3620153f165527
       with:
         working_directory: ${{ inputs.working_directory }}
 
