@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Terraform Plan
-        uses: dis-way/actions/terraform/plan@609da8c99ce0ed770db0fb85be3620153f165527
+        uses: dis-way/actions/terraform/plan@416e9dce478003c6eaba617b6c7b2d71fdeda655
         with:
           working_directory: ${{ env.TF_PROJECT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}
@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Terraform Apply
-        uses: dis-way/actions/terraform/apply@609da8c99ce0ed770db0fb85be3620153f165527
+        uses: dis-way/actions/terraform/apply@416e9dce478003c6eaba617b6c7b2d71fdeda655
         with:
           working_directory: ${{ env.TF_PROJECT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}

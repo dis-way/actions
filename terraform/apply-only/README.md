@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
       ...
       - name: Terraform Init
-        uses: dis-way/actions/terraform/init@609da8c99ce0ed770db0fb85be3620153f165527
+        uses: dis-way/actions/terraform/init@<hash>
         with:
           ...
       - name: Get something from Terraform output
@@ -34,7 +34,7 @@ jobs:
           echo $SOMETHING
       ...
       - name: Terraform Apply
-        uses: dis-way/actions/terraform/apply-only@609da8c99ce0ed770db0fb85be3620153f165527
+        uses: dis-way/actions/terraform/apply-only@<hash>
         with:
           working_directory: ${{ env.TF_PROJECT }}
           arm_client_id: ${{ env.ARM_CLIENT_ID }}
