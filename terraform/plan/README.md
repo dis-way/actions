@@ -17,8 +17,6 @@ jobs:
     uses: altinn/altinn-platform/actions/terraform/plan@main
     with:
         working_directory: ${{ env.TF_PROJECT }}
-        oidc_type: environment
-        oidc_value: ${{ env.ENVIRONMENT }}
         arm_client_id: ${{ env.ARM_CLIENT_ID }}
         arm_subscription_id: ${{ env.ARM_SUBSCRIPTION_ID }}
         tf_backend_state_name: ${{ env.TF_STATE_NAME }}

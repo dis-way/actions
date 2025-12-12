@@ -6,13 +6,6 @@ inputs:
     default: ./infrastructure
     required: true
 
-  oidc_type:
-    description: Specifies a part of subject for OpenID Connect (OIDC), can be values 'branch' or 'environment'
-    required: true
-  oidc_value:
-    description: Name of branch or environment
-    required: true
-
   gh_token:
     description: GitHub Token
     required: true
@@ -100,8 +93,6 @@ runs:
         TERRAFORM_VALIDATE_OUTCOME: ${{ env.VALIDATE_STEP_OUTCOME }}
         TERRAFORM_BACKEND_STATE_NAME: ${{ env.TF_BACKEND_STATE_NAME }}
         ARTIFACT_KEY: ${{ env.ARTIFACT_KEY }}
-        OIDC_TYPE: ${{ inputs.oidc_type }}
-        OIDC_VALUE: ${{ inputs.oidc_value }}
         EVENT_NAME: ${{ github.event_name }}
         ACTOR: ${{ github.actor }}
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
@@ -109,7 +100,7 @@ runs:
         github-token: ${{ inputs.gh_token }}
         script: |
           // 1. Prep the output
-          const output = `# Terraform \`${process.env.OIDC_TYPE}\` \`${process.env.OIDC_VALUE}\`
+          const output = `# Terraform Summary
           #### Initialization ⚙️\`${process.env.TERRAFORM_INIT_OUTCOME}\`
           #### Validation 🤖\`${process.env.TERRAFORM_VALIDATE_OUTCOME}\`
           <details><summary>Validation Output</summary>
@@ -189,8 +180,6 @@ runs:
         TERRAFORM_BACKEND_STATE_NAME: ${{ env.TF_BACKEND_STATE_NAME }}
         ARTIFACT_KEY: ${{ env.ARTIFACT_KEY }}
         EVENT_NAME: ${{ github.event_name }}
-        OIDC_TYPE: ${{ inputs.oidc_type  }}
-        OIDC_VALUE: ${{ inputs.oidc_value }}
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
         ACTOR: ${{ github.actor }}
         ISSUE_NUMBER: ${{ steps.issue_number.outputs.result }}
@@ -204,11 +193,11 @@ runs:
             issue_number: `${process.env.ISSUE_NUMBER}`,
           })
           const botComment = comments.find(comment => {
-            return comment.user.type === 'Bot' && comment.body.includes(`Terraform ${process.env.OIDC_TYPE} ${process.env.OIDC_VALUE}`)
+            return comment.user.type === 'Bot' && comment.body.includes('Terraform Summary')
           })
 
           // 2. Prepare format of the comment
-          const output = `# Terraform \`${process.env.OIDC_TYPE}\` \`${process.env.OIDC_VALUE}\`
+          const output = `# Terraform Summary
           #### Initialization ⚙️\`${process.env.TERRAFORM_INIT_OUTCOME}\`
           #### Validation 🤖\`${process.env.TERRAFORM_VALIDATE_OUTCOME}\`
           <details><summary>Validation Output</summary>

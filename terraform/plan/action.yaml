@@ -6,13 +6,6 @@ inputs:
     default: ./infrastructure
     required: true
 
-  oidc_type:
-    description: Specifies a part of subject for OpenID Connect (OIDC), can be values 'branch' or 'environment'
-    required: true
-  oidc_value:
-    description: Name of branch or environment
-    required: true
-
   arm_client_id:
     required: true
     description: Federated Azure Client ID.
@@ -68,9 +61,6 @@ runs:
       with:
         working_directory: ${{ inputs.working_directory }}
 
-        oidc_type: ${{ inputs.oidc_type }}
-        oidc_value: ${{ inputs.oidc_value }}
-
         arm_client_id: ${{ inputs.arm_client_id }}
         arm_subscription_id: ${{ inputs.arm_subscription_id }}
         arm_tenant_id: ${{ inputs.arm_tenant_id }}
@@ -123,8 +113,6 @@ runs:
       uses: Altinn/altinn-platform/actions/terraform/write-terraform-summary@main
       with:
         working_directory: ${{ inputs.working_directory }}
-        oidc_type: ${{ inputs.oidc_type }}
-        oidc_value: ${{ inputs.oidc_value }}
         gh_token: ${{ inputs.gh_token }}
       env:
         VALIDATE_STEP_OUTPUT: ${{steps.terraform_init.outputs.validate_step_stdout}}
