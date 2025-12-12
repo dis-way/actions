@@ -104,16 +104,14 @@ runs:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
         ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
         ARM_SUBSCRIPTION_ID: ${{ inputs.tf_backend_subscription_id }}
+        ARM_USE_OIDC: "true"
+        ARM_USE_AZUREAD_AUTH: "true"
         TERRAFORM_STATE_FILE: ${{ env.TF_STATE_FILE }}
         TERRAFORM_STORAGE_ACCOUNT_NAME: ${{ inputs.tf_backend_storage_account_name }}
         TERRAFORM_RESOURCE_GROUP_NAME: ${{ inputs.tf_backend_resource_group_name }}
       run: |
         set -euo pipefail
         terraform init -input=false \
-          -backend-config="use_oidc=true" \
-          -backend-config="use_azuread_auth=true" \
-          -backend-config="tenant_id=$ARM_TENANT_ID" \
-          -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID" \
           -backend-config="resource_group_name=$TERRAFORM_RESOURCE_GROUP_NAME" \
           -backend-config="storage_account_name=$TERRAFORM_STORAGE_ACCOUNT_NAME" \
           -backend-config="container_name=${{ inputs.tf_backend_container_name }}" \
