@@ -1,0 +1,69 @@
+name: Terraform Plan (No Init)
+description: Run terraform plan without running init
+inputs:
+  working_directory:
+    description: The directory where the Terraform project is located.
+    default: ./infrastructure
+    required: true
+
+  arm_client_id:
+    required: true
+    description: Federated Azure Client ID.
+  arm_subscription_id:
+    required: true
+    description: Azure Subscription ID
+  arm_tenant_id:
+    description: Azure Tenant ID
+    default: cd0026d8-283b-4a55-9bfa-d0ef4a8ba21c
+
+  tf_args:
+    description: Terraform arguments
+    required: false
+  tf_backend_state_name:
+    description: Name of Terraform state file
+    required: true
+
+outputs:
+  plan_step_exitcode:
+    description: "steps.plan.outputs.exitcode"
+    value: ${{ steps.plan.outputs.exitcode }}
+  plan_step_outcome:
+    description: "steps.plan.outcome"
+    value: ${{ steps.plan.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform Plan
+      id: plan
+      shell: bash
+      if: always()
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
+        EC=$?
+        exit $EC
+      env:
+        ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
+        ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+        ARM_USE_OIDC: "true"
+        ARM_USE_AZUREAD_AUTH: "true"
+        TERRAFORM_ARGS: ${{ inputs.tf_args }}
+
+    - name: Artifact Key
+      id: artifact_key
+      shell: bash
+      run: |
+        set -euo pipefail
+        ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
+        echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
+
+    - name: Upload Plan
+      id: artifact
+      uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      if: success()
+      with:
+        name: ${{ env.ARTIFACT_KEY }}
+        path: ${{ inputs.working_directory }}/tfplan.out

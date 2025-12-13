@@ -1,0 +1,126 @@
+name: Terraform Plan
+description: Run terraform plan
+inputs:
+  working_directory:
+    description: The directory where the Terraform project is located.
+    default: ./infrastructure
+    required: true
+
+  arm_client_id:
+    required: true
+    description: Federated Azure Client ID.
+  arm_subscription_id:
+    required: true
+    description: Azure Subscription ID
+  arm_tenant_id:
+    description: Azure Tenant ID
+    default: cd0026d8-283b-4a55-9bfa-d0ef4a8ba21c
+
+  tf_backend_subscription_id:
+    default: a6e9ee7d-2b65-41e1-adfb-0c8c23515cf9
+    description: Azure Subscription ID for the storage account that persists the terraform state
+  tf_backend_resource_group_name:
+    description: Azure resource group for the storage account that persists the terraform state
+    default: github-dis-way
+  tf_backend_storage_account_name:
+    description: Name of the azure storage account that persists the terraform state
+    default: diswaytfstatestorage
+  tf_backend_container_name:
+    description: Name of the azure storage container that persists the terraform state
+    default: ${{ github.event.repository.name }}
+  tf_backend_state_name:
+    description: Name of Terraform state file
+    required: true
+  tf_version:
+    description: Terraform Version
+  tf_log_level:
+    description: Terraform Log level
+    default: INFO
+  tf_args:
+    description: Terraform arguments
+    required: false
+
+  gh_token:
+    description: GitHub Token
+    required: true
+
+outputs:
+  plan_step_exitcode:
+    description: "Exit code from terraform plan step"
+    value: ${{ steps.plan.outputs.exitcode }}
+  plan_step_outcome:
+    description: "Outcome from terraform plan step"
+    value: ${{ steps.plan.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform Init
+      id: terraform_init
+      uses: dis-way/actions/terraform/init@416e9dce478003c6eaba617b6c7b2d71fdeda655
+      with:
+        working_directory: ${{ inputs.working_directory }}
+
+        arm_client_id: ${{ inputs.arm_client_id }}
+        arm_subscription_id: ${{ inputs.arm_subscription_id }}
+        arm_tenant_id: ${{ inputs.arm_tenant_id }}
+
+        tf_backend_subscription_id: ${{ inputs.tf_backend_subscription_id }}
+        tf_backend_resource_group_name: ${{ inputs.tf_backend_resource_group_name }}
+        tf_backend_storage_account_name: ${{ inputs.tf_backend_storage_account_name }}
+        tf_backend_container_name: ${{ inputs.tf_backend_container_name }}
+        tf_backend_state_name: ${{ inputs.tf_backend_state_name }}
+
+        tf_version: ${{ inputs.tf_version }}
+        tf_log_level: ${{ inputs.tf_log_level }}
+
+    - name: Terraform Plan
+      id: plan
+      shell: bash
+      if: always()
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
+        EC=$?
+        echo "exitcode=$EC" >> $GITHUB_OUTPUT
+        exit $EC
+      env:
+        ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
+        ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+        ARM_USE_OIDC: "true"
+        ARM_USE_AZUREAD_AUTH: "true"
+        TERRAFORM_ARGS: ${{ inputs.tf_args }}
+
+    - name: Artifact Key
+      id: artifact_key
+      shell: bash
+      run: |
+        set -euo pipefail
+        ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
+        echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
+
+    - name: Upload Plan
+      id: artifact
+      uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      if: success()
+      with:
+        name: ${{ env.ARTIFACT_KEY }}
+        path: ${{ inputs.working_directory }}/tfplan.out
+
+    - name: Write Terraform Summary
+      uses: dis-way/actions/terraform/write-terraform-summary@416e9dce478003c6eaba617b6c7b2d71fdeda655
+      with:
+        working_directory: ${{ inputs.working_directory }}
+        gh_token: ${{ inputs.gh_token }}
+      env:
+        VALIDATE_STEP_OUTPUT: ${{steps.terraform_init.outputs.validate_step_stdout}}
+        VALIDATE_STEP_OUTCOME: ${{steps.terraform_init.outputs.validate_step_outcome}}
+        INIT_STEP_OUTPUT: ${{steps.terraform_init.outputs.init_step_stdout}}
+        INIT_STEP_OUTCOME: ${{steps.terraform_init.outputs.init_step_outcome}}
+
+        PLAN_STEP_EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        PLAN_STEP_OUTCOME: ${{ steps.plan.outcome }}
+        TF_BACKEND_STATE_NAME: ${{ inputs.tf_backend_state_name }}
+        ARTIFACT_KEY: ${{ env.ARTIFACT_KEY }}

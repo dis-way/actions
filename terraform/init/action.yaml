@@ -1,0 +1,120 @@
+name: Terraform Setup
+description: Install, initialize, format, and validate Terraform
+inputs:
+  working_directory:
+    description: The directory where the Terraform project is located.
+    default: ./infrastructure
+    required: true
+
+  arm_client_id:
+    required: true
+    description: Federated Azure Client ID.
+  arm_subscription_id:
+    required: true
+    description: Azure Subscription ID
+  arm_tenant_id:
+    required: false
+    description: Azure Tenant ID
+    default: cd0026d8-283b-4a55-9bfa-d0ef4a8ba21c
+
+  tf_backend_subscription_id:
+    required: false
+    default: a6e9ee7d-2b65-41e1-adfb-0c8c23515cf9
+    description: Azure Subscription ID for the storage account that persists the terraform state
+  tf_backend_resource_group_name:
+    required: false
+    description: Azure resource group for the storage account that persists the terraform state
+    default: github-dis-way
+  tf_backend_storage_account_name:
+    required: false
+    description: Name of the azure storage account that persists the terraform state
+    default: diswaytfstatestorage
+  tf_backend_container_name:
+    required: false
+    description: Name of the azure storage container that persists the terraform state
+    default: ${{ github.event.repository.name }}
+  tf_backend_state_name:
+    description: Name of Terraform state file
+    required: true
+  tf_version:
+    required: false
+    description: Terraform Version
+    # renovate: datasource=github-releases depName=terraform packageName=hashicorp/terraform versioning=semver
+    default: 1.14.1
+  tf_log_level:
+    required: false
+    description: Terraform Log level
+    default: INFO
+
+outputs:
+  init_step_stdout:
+    description: "steps.init.outputs.stdout"
+    value: ${{ steps.init.outputs.stdout }}
+  init_step_outcome:
+    description: "steps.init.outcome"
+    value: ${{ steps.init.outcome }}
+
+  validate_step_stdout:
+    description: "steps.validate.outputs.stdout"
+    value: ${{ steps.validate.outputs.stdout }}
+  validate_step_outcome:
+    description: "steps.validate.outcome"
+    value: ${{ steps.validate.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform Install
+      id: install
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      with:
+        terraform_version: ${{ inputs.tf_version }}
+        terraform_wrapper: true
+
+    - name: Terraform Set Logger
+      id: logger
+      shell: bash
+      env:
+        TERRAFORM_LOG_LEVEL: ${{ inputs.tf_log_level }}
+      run: |
+        set -euo pipefail
+        SAFE_TERRAFORM_LOG_LEVEL=$(echo "${TERRAFORM_LOG_LEVEL:-INFO}" | tr -d '\n')
+        echo "TF_LOG=$SAFE_TERRAFORM_LOG_LEVEL" >> "$GITHUB_ENV"
+
+    - name: Set Terraform State File
+      shell: bash
+      env:
+        TERRAFORM_STATE_NAME: ${{ inputs.tf_backend_state_name }}
+      run: |
+        set -euo pipefail
+        echo "TF_STATE_FILE=$TERRAFORM_STATE_NAME" >> $GITHUB_ENV
+
+    - name: Terraform Init
+      id: init
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+        ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.tf_backend_subscription_id }}
+        ARM_USE_OIDC: "true"
+        ARM_USE_AZUREAD_AUTH: "true"
+        TERRAFORM_STATE_FILE: ${{ env.TF_STATE_FILE }}
+        TERRAFORM_STORAGE_ACCOUNT_NAME: ${{ inputs.tf_backend_storage_account_name }}
+        TERRAFORM_RESOURCE_GROUP_NAME: ${{ inputs.tf_backend_resource_group_name }}
+      run: |
+        set -euo pipefail
+        terraform init -input=false \
+          -backend-config="resource_group_name=$TERRAFORM_RESOURCE_GROUP_NAME" \
+          -backend-config="storage_account_name=$TERRAFORM_STORAGE_ACCOUNT_NAME" \
+          -backend-config="container_name=${{ inputs.tf_backend_container_name }}" \
+          -backend-config="key=$TERRAFORM_STATE_FILE"
+
+    - name: Terraform Validate
+      id: validate
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        terraform version
+        terraform validate -no-color

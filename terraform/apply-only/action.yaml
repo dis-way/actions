@@ -1,0 +1,74 @@
+name: Terraform Apply (No Init)
+description: Apply a previously generated terraform plan without running init
+inputs:
+  working_directory:
+    description: The directory where the Terraform project is located.
+    default: ./infrastructure
+    required: true
+
+  arm_client_id:
+    required: true
+    description: Federated Azure Client ID.
+  arm_subscription_id:
+    required: true
+    description: Azure Subscription ID
+  arm_tenant_id:
+    description: Azure Tenant ID
+    default: cd0026d8-283b-4a55-9bfa-d0ef4a8ba21c
+
+  tf_args:
+    description: Terraform arguments
+    required: false
+  tf_output_file:
+    description: JSON file for dumping tf state output
+    default: tf_output.json
+  tf_backend_state_name:
+    description: Name of Terraform state file
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Artifact Key
+      id: artifact_key
+      shell: bash
+      run: |
+        set -euo pipefail
+        ARTIFACT_KEY="${{ inputs.tf_backend_state_name }}.tfplan"
+        echo "ARTIFACT_KEY=$ARTIFACT_KEY" >> $GITHUB_ENV
+
+    - name: Download Plan
+      id: artifact
+      uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+      with:
+        name: ${{ env.ARTIFACT_KEY }}
+        path: ${{ inputs.working_directory }}
+
+    - name: Validate Plan File
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -f "${{ inputs.working_directory }}/tfplan.out" ]; then
+          echo "Error: Plan file tfplan.out not found in ${{ inputs.working_directory }}"
+          exit 1
+        fi
+
+    - name: Terraform Apply
+      id: apply
+      working-directory: ${{ inputs.working_directory }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Applying Terraform plan..."
+        terraform apply -input=false -auto-approve $TERRAFORM_ARGS tfplan.out
+        echo "Capturing Terraform outputs..."
+        terraform output -json > $TERRAFORM_OUTPUT_FILE
+        echo "Terraform apply completed successfully"
+      env:
+        ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
+        ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+        ARM_USE_OIDC: "true"
+        ARM_USE_AZUREAD_AUTH: "true"
+        TERRAFORM_OUTPUT_FILE: ${{ inputs.tf_output_file }}
+        TERRAFORM_ARGS: ${{ inputs.tf_args }}
