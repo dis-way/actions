@@ -43,7 +43,6 @@ runs:
         set -euo pipefail
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
         EC=$?
-        cat tfplan.log
         exit $EC
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
