@@ -57,7 +57,7 @@ runs:
   steps:
     - name: Terraform Init
       id: terraform_init
-      uses: dis-way/actions/terraform/init@afbb91782b7f991c63a6762f037af79d28b861e0
+      uses: dis-way/actions/terraform/init@97fe4f2324c79b61d837cbd299a7fe4d262e94a2
       with:
         working_directory: ${{ inputs.working_directory }}
 
@@ -110,7 +110,7 @@ runs:
         path: ${{ inputs.working_directory }}/tfplan.out
 
     - name: Write Terraform Summary
-      uses: dis-way/actions/terraform/write-terraform-summary@afbb91782b7f991c63a6762f037af79d28b861e0
+      uses: dis-way/actions/terraform/write-terraform-summary@97fe4f2324c79b61d837cbd299a7fe4d262e94a2
       with:
         working_directory: ${{ inputs.working_directory }}
         gh_token: ${{ inputs.gh_token }}
