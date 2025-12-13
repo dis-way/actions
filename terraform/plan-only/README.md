@@ -1,6 +1,6 @@
 # Description
 
-This GitHub Action is similar to `altinn/altinn-platform/actions/terraform/plan` but requires `altinn/altinn-platform/actions/terraform/init` to be run first. This allows you, for example, to run `terraform output` commands you might need before running the Plan.
+This GitHub Action is similar to `dis-way/actions/terraform/plan` but requires `dis-way/actions/terraform/init` to be run first. This allows you, for example, to run `terraform output` commands you might need before running the Plan.
 
 
 ## Sample
