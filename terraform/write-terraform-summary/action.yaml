@@ -46,7 +46,7 @@ runs:
           [ -z "${INIT_STEP_OUTPUT:-}" ] && echo "INIT_STEP_OUTPUT=Not available" >> $GITHUB_ENV
           [ -z "${INIT_STEP_OUTCOME:-}" ] && echo "INIT_STEP_OUTCOME=unknown" >> $GITHUB_ENV
           [ -z "${PLAN_STEP_OUTCOME:-}" ] && echo "PLAN_STEP_OUTCOME=unknown" >> $GITHUB_ENV
-          [ -z "${PLAN_STEP_EXITCODE:-}" ] && echo "PLAN_STEP_EXITCODE=0" >> $GITHUB_ENV
+          [ -z "${PLAN_STEP_EXITCODE:-}" ] && echo "PLAN_STEP_EXITCODE=-1" >> $GITHUB_ENV
         fi
 
     - name: generate random delimiter
