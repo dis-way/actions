@@ -71,14 +71,14 @@ runs:
         # Remove backticks and "Refreshing state" lines, then truncate to 120000 bytes
         plan=$(echo "${plan//\`}" | grep -v 'Refreshing state' | tail --bytes 120000)
         new_length=${#plan}
-        echo "PLAN<<${DELIMITER}2" >> $GITHUB_ENV
+        echo "PLAN<<${DELIMITER}" >> $GITHUB_ENV
         echo '[Lines containing Refreshing state removed]' >> $GITHUB_ENV
         if [ $new_length -lt $original_length ]; then
           echo '[Truncated to 120000 bytes! See logoutput for complete plan]' >> $GITHUB_ENV
         fi
         echo "${plan}" >> $GITHUB_ENV
         echo >> $GITHUB_ENV
-        echo "${DELIMITER}2" >> $GITHUB_ENV
+        echo "${DELIMITER}" >> $GITHUB_ENV
 
     - name: Generate Terraform Summary
       id: action_summary
