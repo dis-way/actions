@@ -1,6 +1,6 @@
 # Introduction
 
-This GitHub Action downloads the previously generated Terraform plan from GitHub artifacts and executes `terraform apply` with the downloaded plan. This action will not run unless the `altinn/altinn-platform/actions/terraform/plan` action has been executed first.
+This GitHub Action downloads the previously generated Terraform plan from GitHub artifacts and executes `terraform apply` with the downloaded plan. This action will not run unless the `dis-way/actions/terraform/plan` action has been executed first.
 
 ## Sample
 ```yaml
