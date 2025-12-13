@@ -2,7 +2,7 @@
 
 This GitHub Action is similar to `altinn/altinn-platform/actions/terraform/apply` but requires `altinn/altinn-platform/actions/terraform/init` to be run first. This allows you, for example, to run `terraform output` commands you might need before running the Plan.
 
-Note: Similar to the other action, this action will not run unless the `altinn/altinn-platform/actions/terraform/plan-only` action has been executed first.
+Note: Similar to the other action, this action will not run unless the `dis-way/actions/terraform/plan-only` action has been executed first.
 
 
 ## Sample
