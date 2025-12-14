@@ -80,11 +80,25 @@ runs:
       if: always()
       working-directory: ${{ inputs.working_directory }}
       run: |
-        set -euo pipefail
+        # Run terraform plan with detailed exit codes, but do not fail the step
+        # on exit code 2 (changes present). Only treat exit code 1 as a failure.
+        set +e
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
         EC=$?
-        echo "exitcode=$EC" >> $GITHUB_OUTPUT
-        exit $EC
+        set -e
+
+        # Expose the raw terraform exit code as a step output so callers can decide
+        # whether there are changes (2), no changes (0), or an error (1).
+        echo "exitcode=$EC" >> "$GITHUB_OUTPUT"
+
+        # Fail the step only on real error (exit code 1). For 0 (no changes) and
+        # 2 (changes), exit successfully so the composite action completes and
+        # outputs are available to downstream jobs.
+        if [ "$EC" -eq 1 ]; then
+          exit 1
+        fi
+
+        exit 0
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
         ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
