@@ -51,16 +51,13 @@ outputs:
   plan_step_outcome:
     description: "Outcome from terraform plan step"
     value: ${{ steps.plan.outcome }}
-  has_changes:
-    description: "Boolean indicating if terraform plan has changes (exitcode == 2)"
-    value: ${{ steps.plan.outputs.exitcode == '2' }}
 
 runs:
   using: composite
   steps:
     - name: Terraform Init
       id: terraform_init
-      uses: dis-way/actions/terraform/init@c4adc57f36fa826eecfe11f1c00be1424ce13612
+      uses: dis-way/actions/terraform/init@afbb91782b7f991c63a6762f037af79d28b861e0
       with:
         working_directory: ${{ inputs.working_directory }}
 
@@ -83,25 +80,11 @@ runs:
       if: always()
       working-directory: ${{ inputs.working_directory }}
       run: |
-        # Run terraform plan with detailed exit codes, but do not fail the step
-        # on exit code 2 (changes present). Only treat exit code 1 as a failure.
-        set +e
+        set -euo pipefail
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
         EC=$?
-        set -e
-
-        # Expose the raw terraform exit code as a step output so callers can decide
-        # whether there are changes (2), no changes (0), or an error (1).
-        echo "exitcode=$EC" >> "$GITHUB_OUTPUT"
-
-        # Fail the step only on real error (exit code 1). For 0 (no changes) and
-        # 2 (changes), exit successfully so the composite action completes and
-        # outputs are available to downstream jobs.
-        if [ "$EC" -eq 1 ]; then
-          exit 1
-        fi
-
-        exit 0
+        echo "exitcode=$EC" >> $GITHUB_OUTPUT
+        exit $EC
       env:
         ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
         ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
@@ -127,7 +110,7 @@ runs:
         path: ${{ inputs.working_directory }}/tfplan.out
 
     - name: Write Terraform Summary
-      uses: dis-way/actions/terraform/write-terraform-summary@c4adc57f36fa826eecfe11f1c00be1424ce13612
+      uses: dis-way/actions/terraform/write-terraform-summary@afbb91782b7f991c63a6762f037af79d28b861e0
       with:
         working_directory: ${{ inputs.working_directory }}
         gh_token: ${{ inputs.gh_token }}
