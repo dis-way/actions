@@ -60,7 +60,7 @@ runs:
   steps:
     - name: Terraform Init
       id: terraform_init
-      uses: dis-way/actions/terraform/init@bd6caa1cc56737ec4e770e63a6617d30e75bba97
+      uses: dis-way/actions/terraform/init@c4adc57f36fa826eecfe11f1c00be1424ce13612
       with:
         working_directory: ${{ inputs.working_directory }}
 
@@ -87,7 +87,8 @@ runs:
         # on exit code 2 (changes present). Only treat exit code 1 as a failure.
         set +e
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
-        EC=$?
+        # Use PIPESTATUS[0] to get the exit code of terraform (first command in pipe), not tee
+        EC=${PIPESTATUS[0]}
         set -e
 
         # Expose the raw terraform exit code as a step output so callers can decide
@@ -127,7 +128,7 @@ runs:
         path: ${{ inputs.working_directory }}/tfplan.out
 
     - name: Write Terraform Summary
-      uses: dis-way/actions/terraform/write-terraform-summary@bd6caa1cc56737ec4e770e63a6617d30e75bba97
+      uses: dis-way/actions/terraform/write-terraform-summary@c4adc57f36fa826eecfe11f1c00be1424ce13612
       with:
         working_directory: ${{ inputs.working_directory }}
         gh_token: ${{ inputs.gh_token }}
