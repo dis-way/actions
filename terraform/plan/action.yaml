@@ -86,45 +86,19 @@ runs:
         # Run terraform plan with detailed exit codes, but do not fail the step
         # on exit code 2 (changes present). Only treat exit code 1 as a failure.
         set +e
-        set -o pipefail
-        
         terraform plan -detailed-exitcode -no-color -input=false -out tfplan.out $TERRAFORM_ARGS 2>&1 | tee tfplan.log
-        # Capture IMMEDIATELY - before ANY other command
-        TF_EXIT_CODE=$?
-        TF_PIPESTATUS_0=${PIPESTATUS[0]}
-        
+        EC=$?
         set -e
-        
-        # Debug: Show what we captured
-        echo "=== DEBUG EXIT CODE CAPTURE ==="
-        echo "TF_EXIT_CODE (from \$?): $TF_EXIT_CODE"
-        echo "TF_PIPESTATUS_0 (from PIPESTATUS[0]): $TF_PIPESTATUS_0"
-        echo "Full PIPESTATUS array: ${PIPESTATUS[@]}"
-        echo "==============================="
-        
-        # Use the pipefail-aware exit code
-        EC=$TF_EXIT_CODE
 
         # Expose the raw terraform exit code as a step output so callers can decide
         # whether there are changes (2), no changes (0), or an error (1).
         echo "exitcode=$EC" >> "$GITHUB_OUTPUT"
-        
-        echo "=== DEBUG GITHUB_OUTPUT ==="
-        echo "Writing: exitcode=$EC"
-        echo "==============================="
 
         # Fail the step only on real error (exit code 1). For 0 (no changes) and
         # 2 (changes), exit successfully so the composite action completes and
         # outputs are available to downstream jobs.
         if [ "$EC" -eq 1 ]; then
-          echo "ERROR: Terraform plan failed with exit code 1"
           exit 1
-        fi
-        
-        if [ "$EC" -eq 2 ]; then
-          echo "SUCCESS: Terraform plan has changes (exit code 2)"
-        elif [ "$EC" -eq 0 ]; then
-          echo "SUCCESS: Terraform plan has NO changes (exit code 0)"
         fi
 
         exit 0
