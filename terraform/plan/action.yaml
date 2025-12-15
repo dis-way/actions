@@ -51,6 +51,9 @@ outputs:
   plan_step_outcome:
     description: "Outcome from terraform plan step"
     value: ${{ steps.plan.outcome }}
+  has_changes:
+    description: "Boolean indicating if terraform plan has changes (exitcode == 2)"
+    value: ${{ steps.plan.outputs.exitcode == '2' }}
 
 runs:
   using: composite
