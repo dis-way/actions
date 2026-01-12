@@ -1,4 +1,4 @@
-name: Prepare Job for Pushing Flux OCI Artifacts to Azure Container Registry
+name: Prepare Job for Pushing OCI Artifacts to Azure Container Registry
 description: Downloads flux cli and fetches credentials for the Azure Container Registry (ACR) to use with flux.
 
 inputs:
