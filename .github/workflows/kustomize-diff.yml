@@ -128,13 +128,13 @@ jobs:
       has-changes: ${{ steps.diff.outputs.has_changes }}
     steps:
       - name: Download PR kustomize output
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: kustomize-pr
           path: kustomize-pr/
 
       - name: Download base kustomize output
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: kustomize-base
           path: kustomize-base/
