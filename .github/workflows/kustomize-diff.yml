@@ -48,6 +48,7 @@ jobs:
           }
 
           IFS=',' read -ra PATTERNS <<< "$BUILD_PATHS"
+          shopt -s nullglob
           for pattern in "${PATTERNS[@]}"; do
             pattern="${pattern// /}"
             for dir in $pattern; do
@@ -97,6 +98,7 @@ jobs:
           }
 
           IFS=',' read -ra PATTERNS <<< "$BUILD_PATHS"
+          shopt -s nullglob
           for pattern in "${PATTERNS[@]}"; do
             pattern="${pattern// /}"
             for dir in $pattern; do
