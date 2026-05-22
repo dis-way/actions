@@ -47,7 +47,7 @@ runs:
   using: composite
   steps:
     - name: Terraform Init
-      uses: dis-way/actions/terraform/init@1b053ffcc483d8b8c945f716e1eff41095f296c5 # main
+      uses: dis-way/actions/terraform/init@de79ff78153ee83ec9743c7e41c9e7cd7ac0f63c # main
       with:
         working_directory: ${{ inputs.working_directory }}
 
