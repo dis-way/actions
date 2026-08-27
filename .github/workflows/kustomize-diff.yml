@@ -153,53 +153,111 @@ jobs:
         id: diff
         shell: bash
         run: |
+          # GitHub rejects issue comments over 65,536 characters, and the comment
+          # action silently truncates the tail rather than failing - so one large
+          # path (e.g. a ConfigMap with a dashboard JSON embedded) could push every
+          # later path's diff out of the comment with no sign anything was dropped.
+          #
+          # Give each changed path an equal share of the budget instead. A PR that
+          # touches a single path still renders in full, exactly as before; only
+          # when several paths change, or one is genuinely enormous, is anything
+          # cut - and then it is cut explicitly, with a marker saying so.
+          MAX_COMMENT_CHARS=63000
+          MIN_BLOCK_CHARS=2000
+
           CHANGED=0
           TOTAL=0
+          OMITTED=0
+          BODY_CHARS=0
           > /tmp/diff-body.md
+
+          # render_diff <text> <max-chars> - print text, truncated on a line boundary.
+          render_diff() {
+            local text="$1" max="$2" shown shown_lines total_lines
+            if [ "${#text}" -le "$max" ]; then
+              printf '%s' "$text"
+              return
+            fi
+            shown="${text:0:$max}"
+            shown="${shown%$'\n'*}"
+            shown_lines=$(printf '%s\n' "$shown" | wc -l | tr -d ' ')
+            total_lines=$(printf '%s\n' "$text" | wc -l | tr -d ' ')
+            printf '%s\n... [truncated: %s of %s diff lines shown - see the Files changed tab for the rest]' \
+              "$shown" "$shown_lines" "$total_lines"
+          }
+
+          resolve() {
+            [ -f "${1}/${2}" ] && printf '%s' "${1}/${2}" || printf '/dev/null'
+          }
 
           all_files=$(
             { ls kustomize-pr/*.yaml 2>/dev/null; ls kustomize-base/*.yaml 2>/dev/null; } \
               | xargs -I{} basename {} | sort -u
           )
 
+          # Pass 1: find which paths changed, so the budget can be shared between them.
+          changed_files=()
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            display="${file%.yaml}"
-            display="${display//-//}"
             TOTAL=$((TOTAL + 1))
+            base_file=$(resolve kustomize-base "$file")
+            pr_file=$(resolve kustomize-pr "$file")
+            if ! dyff between --omit-header --set-exit-code "$base_file" "$pr_file" >/dev/null 2>&1; then
+              changed_files+=("$file")
+            fi
+          done <<< "$all_files"
+          CHANGED=${#changed_files[@]}
 
-            pr_file="kustomize-pr/${file}"
-            base_file="kustomize-base/${file}"
+          # Pass 2: render, splitting each path's share between the short and full blocks.
+          if [ "$CHANGED" -gt 0 ]; then
+            BLOCK_CHARS=$((MAX_COMMENT_CHARS / CHANGED / 2))
+            if [ "$BLOCK_CHARS" -lt "$MIN_BLOCK_CHARS" ]; then
+              BLOCK_CHARS=$MIN_BLOCK_CHARS
+            fi
 
-            [ ! -f "$pr_file" ]   && pr_file="/dev/null"
-            [ ! -f "$base_file" ] && base_file="/dev/null"
+            for file in "${changed_files[@]}"; do
+              display="${file%.yaml}"
+              display="${display//-//}"
+              base_file=$(resolve kustomize-base "$file")
+              pr_file=$(resolve kustomize-pr "$file")
 
-            dyff between --omit-header --set-exit-code "$base_file" "$pr_file" >/dev/null 2>&1 && DIFF_EXIT=0 || DIFF_EXIT=$?
-
-            if [ "$DIFF_EXIT" -ne 0 ]; then
-              CHANGED=$((CHANGED + 1))
               SHORT_DIFF=$(diff --unified "$base_file" "$pr_file" 2>&1 | tail -n +3 | sed 's/```/` ` `/g') || true
               FULL_DIFF=$(diff --unified=9999 "$base_file" "$pr_file" 2>&1 | tail -n +3 | sed 's/```/` ` `/g') || true
-              {
+              CHANGED_LINES=$(printf '%s\n' "$SHORT_DIFF" | grep -c '^[+-]') || true
+
+              BLOCK=$(
                 echo "<details><summary>🔴 <code>${display}</code></summary>"
                 echo ""
                 echo '```diff'
-                echo "$SHORT_DIFF"
+                render_diff "$SHORT_DIFF" "$BLOCK_CHARS"
+                echo ""
                 echo '```'
                 echo ""
                 echo "<details><summary>Show full output</summary>"
                 echo ""
                 echo '```diff'
-                echo "$FULL_DIFF"
+                render_diff "$FULL_DIFF" "$BLOCK_CHARS"
+                echo ""
                 echo '```'
                 echo ""
                 echo "</details>"
                 echo ""
                 echo "</details>"
                 echo ""
-              } >> /tmp/diff-body.md
-            fi
-          done <<< "$all_files"
+              )
+
+              if [ $((BODY_CHARS + ${#BLOCK})) -gt "$MAX_COMMENT_CHARS" ]; then
+                OMITTED=$((OMITTED + 1))
+                LINE="- 🔴 \`${display}\` - ${CHANGED_LINES} changed lines, diff omitted to fit the comment size limit"
+                printf '%s\n' "$LINE" >> /tmp/diff-body.md
+                BODY_CHARS=$((BODY_CHARS + ${#LINE} + 1))
+              else
+                # $(...) strips trailing newlines; re-add the blank line the block ends with.
+                printf '%s\n\n' "$BLOCK" >> /tmp/diff-body.md
+                BODY_CHARS=$((BODY_CHARS + ${#BLOCK} + 2))
+              fi
+            done
+          fi
 
           {
             echo "<!-- kustomize-diff -->"
@@ -207,6 +265,10 @@ jobs:
             echo ""
             if [ "$CHANGED" -gt 0 ]; then
               echo "**${CHANGED} of ${TOTAL} paths changed**"
+              if [ "$OMITTED" -gt 0 ]; then
+                echo ""
+                echo "> ${OMITTED} path(s) are listed without a diff to keep this comment under GitHub's 65,536-character limit."
+              fi
             else
               echo "✅ No kustomize output changes detected across all ${TOTAL} paths."
             fi
