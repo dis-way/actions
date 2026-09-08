@@ -159,8 +159,11 @@ jobs:
           TOTAL=0
           > /tmp/diff-body.md
 
+          # ls exits non-zero when a glob matches nothing, which the step's
+          # -e -o pipefail turns into a job failure. One side legitimately has no
+          # YAML when a PR adds or removes every built path.
           all_files=$(
-            { ls kustomize-pr/*.yaml 2>/dev/null; ls kustomize-base/*.yaml 2>/dev/null; } \
+            { ls kustomize-pr/*.yaml kustomize-base/*.yaml 2>/dev/null || true; } \
               | xargs -I{} basename {} | sort -u
           )
 
