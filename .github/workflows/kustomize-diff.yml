@@ -59,6 +59,10 @@ jobs:
             done
           done
 
+          # upload-artifact skips an empty dir, which makes diff-comment's download
+          # fail. Patterns match nothing on a base branch predating these paths.
+          touch kustomize-output/artifact-placeholder
+
       - name: Upload kustomize output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -103,17 +107,15 @@ jobs:
             pattern="${pattern// /}"
             for dir in $pattern; do
               [ "$(basename "$dir")" = "base" ] && continue
-              output_name="${dir//\//-}"
-              # Dir doesn't exist on base (new path added in PR): create empty placeholder
-              if [ ! -d "$dir" ]; then
-                touch "kustomize-output/${output_name}.yaml"
-                continue
-              fi
-              # Dir exists but has no kustomization.yaml: skip (same as PR build)
               [ -f "${dir}/kustomization.yaml" ] || continue
+              output_name="${dir//\//-}"
               build_kustomize "$dir" "kustomize-output/${output_name}.yaml"
             done
           done
+
+          # upload-artifact skips an empty dir, which makes diff-comment's download
+          # fail. Patterns match nothing on a base branch predating these paths.
+          touch kustomize-output/artifact-placeholder
 
       - name: Upload kustomize base output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
