@@ -1,0 +1,82 @@
+name: Prepare Job for Pushing Flux OCI Artifacts to Azure Container Registry
+description: Downloads flux cli and fetches credentials for the Azure Container Registry (ACR) to use with flux.
+
+inputs:
+  flux_version:
+    description: "Version of flux to use"
+    required: false
+    # renovate: datasource=github-releases depName=flux-cli packageName=fluxcd/flux2 versioning=semver
+    default: "2.6.4"
+    type: string
+  azure_app_id:
+    description: "Azure application id used to authenticate to altinncr"
+    required: true
+  azure_subscription_id:
+    description: "Azure subscription id used to authenticate to altinncr"
+    required: true
+  azure_tenant_id:
+    description: "Azure tenant id used to authenticate to altinncr"
+    required: true
+  acr_name:
+    description: "Name of the Azure Container Registry (ACR) to use"
+    required: false
+    default: "altinncr"
+    type: string
+    pattern: "^[a-zA-Z0-9-]{5,50}$"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup flux
+      uses: fluxcd/flux2/action@1fd61a06264d71cf445ed55c4f14d401d26a1c64 # v2.8.8
+      with:
+        version: ${{ inputs.flux_version }}
+    - name: az login
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure_app_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+    - name: Expose federated credentials to the Azure SDK
+      shell: bash
+      env:
+        AZURE_APP_ID: ${{ inputs.azure_app_id }}
+        AZURE_TENANT: ${{ inputs.azure_tenant_id }}
+      run: |
+        set -euo pipefail
+
+        # `flux --provider=azure` authenticates through the Azure SDK's
+        # DefaultAzureCredential, which resolves a credential by discovery rather
+        # than using the session `az login` just established. The chain stops at
+        # the first credential that fails outright.
+        #
+        # On GitHub-hosted runners nothing earlier in the chain is available, so it
+        # falls through to the CLI credential and picks up that session. On
+        # self-hosted runners backed by Azure Container App Jobs a managed identity
+        # endpoint is present, so ManagedIdentityCredential is attempted instead. It
+        # returns HTTP 400 ("Unable to load the proper Managed Identity") because
+        # the job has a user-assigned identity and flux supplies no client id, and
+        # the chain aborts before the CLI credential is ever reached.
+        #
+        # Handing the SDK the same federated credentials azure/login uses makes
+        # WorkloadIdentityCredential resolve first, so flux authenticates as the
+        # same application on every runner type instead of depending on where the
+        # job happens to land.
+
+        if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+          echo "::error::No OIDC token endpoint available. This action needs 'permissions: id-token: write' on the calling job."
+          exit 1
+        fi
+
+        token_file="${RUNNER_TEMP}/azure-federated-token"
+        install -m 600 /dev/null "${token_file}"
+        curl -sSf \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api%3A%2F%2FAzureADTokenExchange" \
+          | jq -er '.value' > "${token_file}"
+
+        {
+          echo "AZURE_CLIENT_ID=${AZURE_APP_ID}"
+          echo "AZURE_TENANT_ID=${AZURE_TENANT}"
+          echo "AZURE_FEDERATED_TOKEN_FILE=${token_file}"
+        } >> "${GITHUB_ENV}"
