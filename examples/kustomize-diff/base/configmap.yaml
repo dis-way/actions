@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storefront-config
+  namespace: storefront
+data:
+  LOG_LEVEL: info
+  FEATURE_FLAGS: |
+    checkout_v2=false
+    dark_mode=true
