@@ -243,7 +243,7 @@ jobs:
               CHANGED_LINES=$(printf '%s\n' "$SHORT_DIFF" | grep -c '^[+-]') || true
 
               BLOCK=$(
-                echo "<details><summary>🔴 <code>${display}</code></summary>"
+                echo "<details><summary><code>${display}</code></summary>"
                 echo ""
                 echo '```diff'
                 render_diff "$SHORT_DIFF" "$BLOCK_CHARS"
@@ -265,7 +265,7 @@ jobs:
 
               if [ $((BODY_CHARS + ${#BLOCK})) -gt "$MAX_COMMENT_CHARS" ]; then
                 OMITTED=$((OMITTED + 1))
-                LINE="- 🔴 \`${display}\` - ${CHANGED_LINES} changed lines, diff omitted to fit the comment size limit"
+                LINE="- \`${display}\` - ${CHANGED_LINES} changed lines, diff omitted to fit the comment size limit"
                 printf '%s\n' "$LINE" >> /tmp/diff-body.md
                 BODY_CHARS=$((BODY_CHARS + ${#LINE} + 1))
               else
