@@ -1,0 +1,25 @@
+# Exercises the kustomize-diff reusable workflow against the throwaway
+# manifests in examples/kustomize-diff, so a change to either one gets a real
+# comment on its own pull request. Delete this together with those manifests
+# once the workflow no longer needs a live demo.
+name: Kustomize Diff Example
+
+on:
+  pull_request:
+    paths:
+      - examples/kustomize-diff/**
+      - .github/workflows/kustomize-diff.yml
+      - .github/workflows/kustomize-diff-example.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: Diff the example overlays
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/kustomize-diff.yml
+    with:
+      build-paths: examples/kustomize-diff/overlays/*

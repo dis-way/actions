@@ -52,10 +52,16 @@ jobs:
           for pattern in "${PATTERNS[@]}"; do
             pattern="${pattern// /}"
             for dir in $pattern; do
+              dir="${dir#./}"
+              dir="${dir%/}"
               [ "$(basename "$dir")" = "base" ] && continue
               [ -f "${dir}/kustomization.yaml" ] || continue
-              output_name="${dir//\//-}"
-              build_kustomize "$dir" "kustomize-output/${output_name}.yaml"
+              # Mirror the source tree inside the artifact. Flattening the path into the
+              # filename used to be lossy: a directory called kustomize-diff came back
+              # out of the comment as kustomize/diff.
+              output_file="kustomize-output/${dir}.yaml"
+              mkdir -p "$(dirname "$output_file")"
+              build_kustomize "$dir" "$output_file"
             done
           done
 
@@ -73,7 +79,7 @@ jobs:
     name: Build kustomize from base branch
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout base branch
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.ref }}
@@ -106,10 +112,16 @@ jobs:
           for pattern in "${PATTERNS[@]}"; do
             pattern="${pattern// /}"
             for dir in $pattern; do
+              dir="${dir#./}"
+              dir="${dir%/}"
               [ "$(basename "$dir")" = "base" ] && continue
               [ -f "${dir}/kustomization.yaml" ] || continue
-              output_name="${dir//\//-}"
-              build_kustomize "$dir" "kustomize-output/${output_name}.yaml"
+              # Mirror the source tree inside the artifact. Flattening the path into the
+              # filename used to be lossy: a directory called kustomize-diff came back
+              # out of the comment as kustomize/diff.
+              output_file="kustomize-output/${dir}.yaml"
+              mkdir -p "$(dirname "$output_file")"
+              build_kustomize "$dir" "$output_file"
             done
           done
 
@@ -117,7 +129,7 @@ jobs:
           # fail. Patterns match nothing on a base branch predating these paths.
           touch kustomize-output/artifact-placeholder
 
-      - name: Upload kustomize base output
+      - name: Upload kustomize output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: kustomize-base
@@ -151,149 +163,552 @@ jobs:
           tar -xzf dyff.tar.gz -C /usr/local/bin dyff
           rm dyff.tar.gz
 
+      # This repository publishes kustomize-diff as a reusable workflow, so the
+      # job below runs against the *caller's* checkout - none of this repo's
+      # files are on disk here. The renderer therefore has to travel inside the
+      # workflow itself rather than living next to it as a script.
+      - name: Write comment renderer
+        shell: bash
+        run: |
+          mkdir -p /tmp/kustomize-diff
+          cat > /tmp/kustomize-diff/render.py <<'PYTHON'
+          #!/usr/bin/env python3
+          """Summarise built kustomize output as a per-Kubernetes-resource change report.
+
+          dyff already knows what a Kubernetes resource is: with entity detection on it
+          pairs documents across the two files by apiVersion/kind/namespace/name rather
+          than by position, and its "github" output style prints that identity beside
+          every changed path. That is what turns a wall of YAML into "this Deployment
+          had these three fields changed", which is what a reviewer wants to know.
+
+          dyff has no machine-readable output - -o takes human, brief, github, gitlab
+          and gitea only - so this parses the github style. Its grammar is line-oriented
+          and unambiguous, because every value line carries a prefix:
+
+              @@ <path> @@           the path that changed
+              # <identity>           omitted when the "from" file holds fewer than 2 documents
+              ! <change description> one or more per path
+              - <before>             value lines, always prefixed with "- ", "+ " or "  "
+              + <after>
+
+          Usage: render.py <base-dir> <pr-dir> <output-file>
+          """
+
+          import html
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          from collections import OrderedDict
+
+          # GitHub rejects issue comments over 65,536 characters, and the comment action
+          # silently truncates the tail rather than failing - so one large path could
+          # push every later path out of the comment with no sign anything was dropped.
+          MAX_COMMENT_CHARS = 63000
+          MIN_DIFF_CHARS = 1500
+          # A rendered path block is bigger than the diff text it holds: headings, tables
+          # and the <details> wrappers all cost characters the budget must reserve for.
+          PATH_OVERHEAD_CHARS = 700
+          # Long enough for an image reference carrying a digest, short enough that a
+          # table cell stays readable.
+          MAX_CELL_CHARS = 160
+          # The image rollup is a convenience, not the report - it must not be able to
+          # crowd out the per-resource detail underneath it.
+          MAX_IMAGE_ROWS = 40
+          # One resource is always rendered in full so a path is never listed empty, so
+          # its table needs a bound of its own.
+          MAX_FIELD_ROWS = 40
+          # A path that does not fit still costs a line saying so, and in the worst case
+          # every path needs one. Budget for that up front.
+          ONE_LINE_CHARS = 120
+
+          # An empty file makes dyff bail with "comparing YAMLs with a different number
+          # of documents is currently not supported", but a file holding only a document
+          # separator parses as zero documents and compares fine - every resource on the
+          # other side is then reported as added or removed.
+          EMPTY_DOC = "---\n"
+
+          VERSION_RE = re.compile(r"^v\d+((alpha|beta)\d+)?$")
+          IMAGE_PATH_RE = re.compile(r"\.(?:initContainers|containers|ephemeralContainers)\.([^.]+)\.image$")
+          # What dyff labels documents with once it has given up on entity detection.
+          POSITIONAL_RE = re.compile(r"^document #\d+$")
+
+          MODIFIED, ADDED, REMOVED = "modified", "added", "removed"
+          STATUSES = (MODIFIED, ADDED, REMOVED)
+
+
+          class Detail:
+              """One change description under a path, together with its value lines."""
+
+              def __init__(self, description):
+                  self.description = description
+                  self.lines = []
+
+              @property
+              def before(self):
+                  return [line[2:] for line in self.lines if line.startswith("- ")]
+
+              @property
+              def after(self):
+                  return [line[2:] for line in self.lines if line.startswith("+ ")]
+
+              @property
+              def is_scalar_change(self):
+                  """One value replaced by one value - the case that fits a table row."""
+                  return len(self.lines) == 2 and len(self.before) == 1 and len(self.after) == 1
+
+              @property
+              def whole_document(self):
+                  if "document added" in self.description:
+                      return ADDED
+                  if "document removed" in self.description:
+                      return REMOVED
+                  return None
+
+
+          class Entry:
+              """One `@@ path @@` block of a dyff report."""
+
+              def __init__(self, path):
+                  self.path = path
+                  self.identity = None
+                  self.details = []
+
+
+          def parse_report(text):
+              """Turn dyff's github output style into Entry objects."""
+              entries = []
+              entry = None
+              detail = None
+              for line in text.splitlines():
+                  if line.startswith("@@ ") and line.endswith(" @@"):
+                      entry = Entry(line[3:-3])
+                      detail = None
+                      entries.append(entry)
+                  elif entry is None:
+                      continue
+                  elif line.startswith("# "):
+                      entry.identity = line[2:].strip()
+                  elif line.startswith("! "):
+                      detail = Detail(line[2:].strip())
+                      entry.details.append(detail)
+                  elif detail is not None:
+                      detail.lines.append(line)
+
+              kept = []
+              for entry in entries:
+                  for detail in entry.details:
+                      while detail.lines and not detail.lines[-1].strip():
+                          detail.lines.pop()
+                  # Adding or removing a resource shifts every later document, which dyff
+                  # reports as a file-level reorder. That is noise here - the addition
+                  # itself is already reported - and it is the only file-level change
+                  # kustomize output produces.
+                  if entry.path == "(file level)":
+                      entry.details = [d for d in entry.details if "order changed" not in d.description]
+                  if entry.details:
+                      kept.append(entry)
+              return kept
+
+
+          def split_identity(identity):
+              """Split dyff's apiVersion/kind[/namespace]/name into (kind, namespace, name).
+
+              The API group can itself contain a slash (apps/v1/Deployment/shop/api), so
+              the version segment is what tells us where the apiVersion ends.
+              """
+              parts = identity.split("/")
+              if len(parts) >= 2 and VERSION_RE.match(parts[1]):
+                  rest = parts[2:]
+              elif parts and VERSION_RE.match(parts[0]):
+                  rest = parts[1:]
+              else:
+                  return None, None, identity
+              if len(rest) == 3:
+                  return rest[0], rest[1], rest[2]
+              if len(rest) == 2:
+                  return rest[0], None, rest[1]
+              return None, None, identity
+
+
+          def scan_documents(text):
+              """Read Kubernetes identities out of a multi-document YAML string.
+
+              Only needed where dyff hands us no identity. kustomize output is generated
+              and regular, so reading the top-level keys of each document is enough.
+              """
+              identities = []
+              state = {"api": None, "kind": None, "name": None, "namespace": None}
+              in_metadata = False
+
+              def flush():
+                  if state["kind"] and state["name"]:
+                      identities.append(
+                          "/".join(
+                              p for p in (state["api"], state["kind"], state["namespace"], state["name"]) if p
+                          )
+                      )
+
+              for line in text.splitlines():
+                  if line.rstrip() == "---":
+                      flush()
+                      state = dict.fromkeys(state, None)
+                      in_metadata = False
+                  elif line.startswith("apiVersion:"):
+                      state["api"] = line.split(":", 1)[1].strip()
+                      in_metadata = False
+                  elif line.startswith("kind:"):
+                      state["kind"] = line.split(":", 1)[1].strip()
+                      in_metadata = False
+                  elif line.startswith("metadata:"):
+                      in_metadata = True
+                  elif in_metadata and line.startswith("  ") and not line.startswith("   "):
+                      key, _, value = line.strip().partition(":")
+                      if key in ("name", "namespace"):
+                          state[key] = value.strip().strip("'\"")
+                  elif line[:1] not in (" ", "", "#"):
+                      in_metadata = False
+              flush()
+              return identities
+
+
+          def identity_of(entry, fallback):
+              """The best identity available for this entry, most reliable source first."""
+              if entry.identity:
+                  return entry.identity
+              for detail in entry.details:
+                  if detail.whole_document:
+                      found = scan_documents("\n".join(line[2:] for line in detail.lines))
+                      if found:
+                          return found[0]
+              return fallback
+
+
+          def run_dyff(base_path, pr_path):
+              result = subprocess.run(
+                  [
+                      "dyff", "between",
+                      "--omit-header",
+                      "--color", "off",
+                      "--detect-kubernetes",
+                      "--output", "github",
+                      base_path, pr_path,
+                  ],
+                  capture_output=True,
+                  text=True,
+              )
+              return result.returncode, result.stdout, result.stderr
+
+
+          def group_by_resource(entries, base_text, pr_text):
+              """Collapse a dyff report into one bucket per Kubernetes resource."""
+              # With fewer than two documents on the "from" side dyff omits the identity
+              # line entirely, so read the identity out of the files instead.
+              identities = scan_documents(base_text) or scan_documents(pr_text)
+              fallback = identities[0] if len(identities) == 1 else "(file level)"
+
+              groups = OrderedDict()
+              for entry in entries:
+                  group = groups.setdefault(
+                      identity_of(entry, fallback),
+                      {"status": MODIFIED, "fields": [], "blocks": [], "images": []},
+                  )
+                  rest = []
+                  for detail in entry.details:
+                      whole = detail.whole_document
+                      if whole:
+                          group["status"] = whole
+                          group["blocks"].append((None, [detail]))
+                      elif detail.is_scalar_change:
+                          before, after = detail.before[0], detail.after[0]
+                          group["fields"].append((entry.path, before, after))
+                          match = IMAGE_PATH_RE.search(entry.path)
+                          if match:
+                              group["images"].append((match.group(1), before, after))
+                      else:
+                          rest.append(detail)
+                  if rest:
+                      group["blocks"].append((entry.path, rest))
+              return groups
+
+
+          def render_block(path, details):
+              """Re-emit changes as dyff-style diff text, grouped under their path."""
+              if path is None:
+                  # A whole document: its own YAML body says everything the header would.
+                  return "\n".join(line for d in details for line in d.lines)
+              out = ["@@ {} @@".format(path)]
+              for detail in details:
+                  out.append("! {}".format(detail.description))
+                  out.extend(detail.lines)
+              return "\n".join(out)
+
+
+          def cell(value):
+              """Render a value as a markdown table cell."""
+              value = value.strip()
+              if not value:
+                  return "_(empty)_"
+              if len(value) > MAX_CELL_CHARS:
+                  value = value[: MAX_CELL_CHARS - 1] + "…"
+              fence = "`"
+              while fence in value:
+                  fence += "`"
+              pad = " " if value.startswith("`") or value.endswith("`") else ""
+              return "{f}{p}{v}{p}{f}".format(f=fence, p=pad, v=value.replace("|", "\\|"))
+
+
+          def truncate(text, limit):
+              """Trim text to a line boundary, saying how much was left out."""
+              if len(text) <= limit:
+                  return text
+              shown = text[:limit]
+              # A minified blob - a dashboard JSON on one line, say - can carry no
+              # newline for the whole budget, and trimming back to one would then throw
+              # away nearly everything. Only cut on a line boundary when one is close.
+              trimmed = shown.rsplit("\n", 1)[0]
+              if len(trimmed) >= limit // 2:
+                  shown = trimmed
+              dropped = text.count("\n") - shown.count("\n")
+              return "{}\n... [{} more lines omitted to fit GitHub's comment size limit]".format(shown, dropped)
+
+
+          def label(identity):
+              kind, namespace, name = split_identity(identity)
+              if kind is None:
+                  return cell(identity)
+              return "{} · {}".format(cell(kind), cell("{}/{}".format(namespace, name) if namespace else name))
+
+
+          def render_resource(identity, group, budget):
+              out = ["#### {} — {}".format(label(identity), group["status"]), ""]
+              if group["fields"]:
+                  out.append("| Field | Before | After |")
+                  out.append("| --- | --- | --- |")
+                  for path, before, after in group["fields"][:MAX_FIELD_ROWS]:
+                      out.append("| {} | {} | {} |".format(cell(path), cell(before), cell(after)))
+                  dropped = len(group["fields"]) - MAX_FIELD_ROWS
+                  out.append("")
+                  if dropped > 0:
+                      out.append("_…and {} more changed field(s)._".format(dropped))
+                      out.append("")
+              if group["blocks"]:
+                  body = "\n\n".join(render_block(path, details) for path, details in group["blocks"])
+                  summary = "Show YAML" if group["status"] != MODIFIED else "Other changes"
+                  out += [
+                      "<details><summary>{}</summary>".format(summary),
+                      "",
+                      "```diff",
+                      truncate(body, budget).replace("```", "` ` `"),
+                      "```",
+                      "",
+                      "</details>",
+                      "",
+                  ]
+              return "\n".join(out)
+
+
+          def render_path(display, groups, budget):
+              counts = OrderedDict((status, 0) for status in STATUSES)
+              for group in groups.values():
+                  counts[group["status"]] += 1
+              summary = ", ".join("{} {}".format(n, status) for status, n in counts.items() if n)
+              out = [
+                  "<details open><summary><code>{}</code> — {}</summary>".format(
+                      html.escape(display), summary
+                  ),
+                  "",
+              ]
+              if any(POSITIONAL_RE.match(identity) for identity in groups):
+                  out += [
+                      "> Listed by position, not by name: a document in this path has no "
+                      "`metadata.name`, which turns off dyff's Kubernetes entity detection "
+                      "for the whole file.",
+                      "",
+                  ]
+              used = 0
+              for rendered, (identity, group) in enumerate(groups.items()):
+                  left = len(groups) - rendered
+                  block = render_resource(identity, group, max(MIN_DIFF_CHARS, (budget - used) // left))
+                  # Always render one resource, so a changed path is never shown empty.
+                  if rendered and used + len(block) > budget:
+                      out += ["_…and {} more changed resource(s), omitted to fit the comment "
+                              "size limit._".format(left), ""]
+                      break
+                  out.append(block)
+                  used += len(block)
+              out += ["</details>", ""]
+              return "\n".join(out)
+
+
+          def render_failure(display, message):
+              return "\n".join(
+                  [
+                      "<details open><summary>⚠️ <code>{}</code> — could not be compared</summary>".format(
+                          html.escape(display)
+                      ),
+                      "",
+                      "```",
+                      truncate(message.strip(), MIN_DIFF_CHARS).replace("```", "` ` `"),
+                      "```",
+                      "",
+                      "</details>",
+                      "",
+                  ]
+              )
+
+
+          def collect(directory):
+              """Every built manifest in a directory tree, keyed by its kustomize path."""
+              found = {}
+              for root, _, files in os.walk(directory):
+                  for name in files:
+                      if name.endswith(".yaml"):
+                          full = os.path.join(root, name)
+                          found[os.path.relpath(full, directory)[: -len(".yaml")]] = full
+              return found
+
+
+          def read(path):
+              if path is None:
+                  return ""
+              with open(path, encoding="utf-8", errors="replace") as handle:
+                  return handle.read()
+
+
+          def compare(base_dir, pr_dir):
+              """Diff every built path, returning (display, groups, failure) per changed path."""
+              base_files, pr_files = collect(base_dir), collect(pr_dir)
+              handle, empty = tempfile.mkstemp(suffix=".yaml", prefix="kustomize-diff-empty-")
+              os.write(handle, EMPTY_DOC.encode())
+              os.close(handle)
+
+              changed = []
+              names = sorted(set(base_files) | set(pr_files))
+              for name in names:
+                  base_path, pr_path = base_files.get(name), pr_files.get(name)
+                  code, stdout, stderr = run_dyff(base_path or empty, pr_path or empty)
+                  if code != 0:
+                      changed.append((name, None, stderr or stdout or "dyff exited {}".format(code)))
+                      continue
+                  entries = parse_report(stdout)
+                  if entries:
+                      changed.append((name, group_by_resource(entries, read(base_path), read(pr_path)), None))
+              return changed, len(names)
+
+
+          def render_head(changed, total, images):
+              head = ["<!-- kustomize-diff -->", "## Kustomize Diff", ""]
+              if not total:
+                  head.append("No kustomize paths were built.")
+                  return head
+              if not changed:
+                  head.append(
+                      "✅ No kustomize output changes across all {} path{}.".format(
+                          total, "" if total == 1 else "s"
+                      )
+                  )
+                  return head
+
+              resources = OrderedDict((status, 0) for status in STATUSES)
+              for _, groups, _ in changed:
+                  for group in (groups or {}).values():
+                      resources[group["status"]] += 1
+              counted = ", ".join("{} {}".format(n, s) for s, n in resources.items() if n)
+              head.append(
+                  "**{} of {} path{} changed** — {}.".format(
+                      len(changed), total, "" if total == 1 else "s", counted or "changes detected"
+                  )
+              )
+              if images:
+                  head += [
+                      "",
+                      "### Container images",
+                      "",
+                      "| Path | Resource | Container | Before | After |",
+                      "| --- | --- | --- | --- | --- |",
+                  ]
+                  head += [
+                      "| {} | {} | {} | {} | {} |".format(
+                          cell(display), label(identity), cell(container), cell(before), cell(after)
+                      )
+                      for display, identity, container, before, after in images[:MAX_IMAGE_ROWS]
+                  ]
+                  if len(images) > MAX_IMAGE_ROWS:
+                      head += [
+                          "",
+                          "> {} further image change(s) are listed with their resources below.".format(
+                              len(images) - MAX_IMAGE_ROWS
+                          ),
+                      ]
+              return head
+
+
+          def render_comment(changed, total):
+              images = [
+                  (display, identity, container, before, after)
+                  for display, groups, _ in changed
+                  for identity, group in (groups or {}).items()
+                  for container, before, after in group["images"]
+              ]
+              head = render_head(changed, total, images)
+              # Reserve for the head, for the note the body may add to it, and for a
+              # one-line entry per path in case none of them fit.
+              available = max(
+                  0,
+                  MAX_COMMENT_CHARS - len("\n".join(head)) - 200 - ONE_LINE_CHARS * len(changed),
+              )
+
+              body = []
+              used = 0
+              omitted = 0
+              if changed:
+                  budget = max(MIN_DIFF_CHARS, available // len(changed) - PATH_OVERHEAD_CHARS)
+                  for display, groups, failure in changed:
+                      block = render_failure(display, failure) if failure else render_path(display, groups, budget)
+                      if used + len(block) > available:
+                          omitted += 1
+                          block = "- {} — diff omitted to fit the comment size limit\n".format(cell(display))
+                      body.append(block)
+                      used += len(block)
+              if omitted:
+                  head += [
+                      "",
+                      "> {} path(s) are listed without a diff to keep this comment under "
+                      "GitHub's 65,536-character limit.".format(omitted),
+                  ]
+              comment = "\n".join(head) + "\n\n" + "\n".join(body)
+              # Every path is budgeted above, so this should never fire - but the comment
+              # being silently truncated by GitHub is the one outcome worth ruling out
+              # unconditionally.
+              if len(comment) > MAX_COMMENT_CHARS:
+                  comment = truncate(comment, MAX_COMMENT_CHARS)
+              return comment
+
+
+          def main():
+              base_dir, pr_dir, out_file = sys.argv[1], sys.argv[2], sys.argv[3]
+              changed, total = compare(base_dir, pr_dir)
+              with open(out_file, "w", encoding="utf-8") as handle:
+                  handle.write(render_comment(changed, total).rstrip() + "\n")
+              github_output = os.environ.get("GITHUB_OUTPUT")
+              if github_output:
+                  with open(github_output, "a", encoding="utf-8") as handle:
+                      handle.write("has_changes={}\n".format("true" if changed else "false"))
+
+
+          if __name__ == "__main__":
+              main()
+          PYTHON
+
       - name: Generate diff comment
         id: diff
         shell: bash
         run: |
-          # GitHub rejects issue comments over 65,536 characters, and the comment
-          # action silently truncates the tail rather than failing - so one large
-          # path (e.g. a ConfigMap with a dashboard JSON embedded) could push every
-          # later path's diff out of the comment with no sign anything was dropped.
-          #
-          # Give each changed path an equal share of the budget instead. A PR that
-          # touches a single path still renders in full, exactly as before; only
-          # when several paths change, or one is genuinely enormous, is anything
-          # cut - and then it is cut explicitly, with a marker saying so.
-          MAX_COMMENT_CHARS=63000
-          MIN_BLOCK_CHARS=2000
-          # A rendered block is larger than the diff text it holds: the <details>
-          # wrapper and the two truncation markers together add ~360 characters.
-          # The budget has to reserve for those, or a path sized right at its share
-          # overflows and gets dropped to a one-line entry with no diff at all.
-          PATH_OVERHEAD_CHARS=500
-
-          CHANGED=0
-          TOTAL=0
-          OMITTED=0
-          BODY_CHARS=0
-          > /tmp/diff-body.md
-
-          # render_diff <text> <max-chars> - print text, truncated on a line boundary.
-          render_diff() {
-            local text="$1" max="$2" shown trimmed shown_lines total_lines
-            if [ "${#text}" -le "$max" ]; then
-              printf '%s' "$text"
-              return
-            fi
-            shown="${text:0:$max}"
-            # Prefer to cut on a line boundary, but a minified blob (a dashboard
-            # JSON on a single line, say) can carry no newline for the whole
-            # budget - trimming back to one would then throw away nearly
-            # everything, so in that case cut mid-line instead.
-            trimmed="${shown%$'\n'*}"
-            if [ "${#trimmed}" -ge $((max / 2)) ]; then
-              shown="$trimmed"
-            fi
-            shown_lines=$(printf '%s\n' "$shown" | wc -l | tr -d ' ')
-            total_lines=$(printf '%s\n' "$text" | wc -l | tr -d ' ')
-            printf '%s\n... [truncated: %s of %s diff lines shown - see the Files changed tab for the rest]' \
-              "$shown" "$shown_lines" "$total_lines"
-          }
-
-          resolve() {
-            [ -f "${1}/${2}" ] && printf '%s' "${1}/${2}" || printf '/dev/null'
-          }
-
-          # ls exits non-zero when a glob matches nothing, which the step's
-          # -e -o pipefail turns into a job failure. One side legitimately has no
-          # YAML when a PR adds or removes every built path.
-          all_files=$(
-            { ls kustomize-pr/*.yaml kustomize-base/*.yaml 2>/dev/null || true; } \
-              | xargs -I{} basename {} | sort -u
-          )
-
-          # Pass 1: find which paths changed, so the budget can be shared between them.
-          changed_files=()
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            TOTAL=$((TOTAL + 1))
-            base_file=$(resolve kustomize-base "$file")
-            pr_file=$(resolve kustomize-pr "$file")
-            if ! dyff between --omit-header --set-exit-code "$base_file" "$pr_file" >/dev/null 2>&1; then
-              changed_files+=("$file")
-            fi
-          done <<< "$all_files"
-          CHANGED=${#changed_files[@]}
-
-          # Pass 2: render, splitting each path's share between the short and full blocks.
-          if [ "$CHANGED" -gt 0 ]; then
-            BLOCK_CHARS=$(((MAX_COMMENT_CHARS / CHANGED - PATH_OVERHEAD_CHARS) / 2))
-            if [ "$BLOCK_CHARS" -lt "$MIN_BLOCK_CHARS" ]; then
-              BLOCK_CHARS=$MIN_BLOCK_CHARS
-            fi
-
-            for file in "${changed_files[@]}"; do
-              display="${file%.yaml}"
-              display="${display//-//}"
-              base_file=$(resolve kustomize-base "$file")
-              pr_file=$(resolve kustomize-pr "$file")
-
-              SHORT_DIFF=$(diff --unified "$base_file" "$pr_file" 2>&1 | tail -n +3 | sed 's/```/` ` `/g') || true
-              FULL_DIFF=$(diff --unified=9999 "$base_file" "$pr_file" 2>&1 | tail -n +3 | sed 's/```/` ` `/g') || true
-              CHANGED_LINES=$(printf '%s\n' "$SHORT_DIFF" | grep -c '^[+-]') || true
-
-              BLOCK=$(
-                echo "<details><summary>🔴 <code>${display}</code></summary>"
-                echo ""
-                echo '```diff'
-                render_diff "$SHORT_DIFF" "$BLOCK_CHARS"
-                echo ""
-                echo '```'
-                echo ""
-                echo "<details><summary>Show full output</summary>"
-                echo ""
-                echo '```diff'
-                render_diff "$FULL_DIFF" "$BLOCK_CHARS"
-                echo ""
-                echo '```'
-                echo ""
-                echo "</details>"
-                echo ""
-                echo "</details>"
-                echo ""
-              )
-
-              if [ $((BODY_CHARS + ${#BLOCK})) -gt "$MAX_COMMENT_CHARS" ]; then
-                OMITTED=$((OMITTED + 1))
-                LINE="- 🔴 \`${display}\` - ${CHANGED_LINES} changed lines, diff omitted to fit the comment size limit"
-                printf '%s\n' "$LINE" >> /tmp/diff-body.md
-                BODY_CHARS=$((BODY_CHARS + ${#LINE} + 1))
-              else
-                # $(...) strips trailing newlines; re-add the blank line the block ends with.
-                printf '%s\n\n' "$BLOCK" >> /tmp/diff-body.md
-                BODY_CHARS=$((BODY_CHARS + ${#BLOCK} + 2))
-              fi
-            done
-          fi
-
-          {
-            echo "<!-- kustomize-diff -->"
-            echo "## Kustomize Diff"
-            echo ""
-            if [ "$CHANGED" -gt 0 ]; then
-              echo "**${CHANGED} of ${TOTAL} paths changed**"
-              if [ "$OMITTED" -gt 0 ]; then
-                echo ""
-                echo "> ${OMITTED} path(s) are listed without a diff to keep this comment under GitHub's 65,536-character limit."
-              fi
-            else
-              echo "✅ No kustomize output changes detected across all ${TOTAL} paths."
-            fi
-            echo ""
-            cat /tmp/diff-body.md
-          } > /tmp/diff-comment.md
-
-          echo "has_changes=$([ "$CHANGED" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          python3 /tmp/kustomize-diff/render.py \
+            kustomize-base kustomize-pr /tmp/diff-comment.md
 
       - name: Find existing comment
         uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4.0.0
