@@ -9,7 +9,10 @@ on:
         type: string
     outputs:
       has-changes:
-        description: Whether any kustomize output changed between base and PR
+        description: >-
+          Whether any kustomize output changed between base and PR. A path dyff
+          could not compare counts as changed, since "nothing changed" is not
+          something a failed comparison can establish.
         value: ${{ jobs.diff-comment.outputs.has-changes }}
 
 permissions:
@@ -206,22 +209,31 @@ jobs:
           # silently truncates the tail rather than failing - so one large path could
           # push every later path out of the comment with no sign anything was dropped.
           MAX_COMMENT_CHARS = 63000
-          MIN_DIFF_CHARS = 1500
-          # A rendered path block is bigger than the diff text it holds: headings, tables
-          # and the <details> wrappers all cost characters the budget must reserve for.
-          PATH_OVERHEAD_CHARS = 700
+          # Floors, so a path or a resource that does get rendered is worth reading.
+          MIN_PATH_CHARS = 2000
+          MIN_RESOURCE_CHARS = 800
+          # Below this a diff block says less than the line explaining its absence.
+          MIN_BLOCK_CHARS = 300
+          # What a path costs before any resource is rendered: the <details> wrapper and
+          # its summary line.
+          PATH_OVERHEAD_CHARS = 300
+          # Share of a resource's budget its field table may take when there is also a
+          # diff block to render, so a wide table cannot squeeze the diff out entirely.
+          FIELD_TABLE_SHARE = 0.6
           # Long enough for an image reference carrying a digest, short enough that a
           # table cell stays readable.
           MAX_CELL_CHARS = 160
+          # Field paths get a larger cap: two deeply nested paths truncated to the same
+          # prefix would render as indistinguishable rows.
+          MAX_PATH_CHARS = 400
           # The image rollup is a convenience, not the report - it must not be able to
           # crowd out the per-resource detail underneath it.
           MAX_IMAGE_ROWS = 40
           # One resource is always rendered in full so a path is never listed empty, so
           # its table needs a bound of its own.
           MAX_FIELD_ROWS = 40
-          # A path that does not fit still costs a line saying so, and in the worst case
-          # every path needs one. Budget for that up front.
-          ONE_LINE_CHARS = 120
+          # Fixed cost of the line that stands in for a path that did not fit.
+          ONE_LINE_CHARS = 60
 
           # An empty file makes dyff bail with "comparing YAMLs with a different number
           # of documents is currently not supported", but a file holding only a document
@@ -255,8 +267,18 @@ jobs:
 
               @property
               def is_scalar_change(self):
-                  """One value replaced by one value - the case that fits a table row."""
-                  return len(self.lines) == 2 and len(self.before) == 1 and len(self.after) == 1
+                  """One value replaced by one value - the case that fits a table row.
+
+                  Restricted to plain value changes. dyff reports a type change with two
+                  lines as well, and `3` -> `"3"` in a Before/After table reads as a
+                  no-op unless the description saying why comes with it.
+                  """
+                  return (
+                      self.description.startswith("± value change")
+                      and len(self.lines) == 2
+                      and len(self.before) == 1
+                      and len(self.after) == 1
+                  )
 
               @property
               def whole_document(self):
@@ -315,8 +337,10 @@ jobs:
           def split_identity(identity):
               """Split dyff's apiVersion/kind[/namespace]/name into (kind, namespace, name).
 
-              The API group can itself contain a slash (apps/v1/Deployment/shop/api), so
-              the version segment is what tells us where the apiVersion ends.
+              apiVersion is group/version outside the core group and bare v1 inside it,
+              so the identity opens with either two segments or one. The version is what
+              marks the boundary: apps/v1/Deployment/api and v1/Service/shop/api both
+              have four segments but mean different things.
               """
               parts = identity.split("/")
               if len(parts) >= 2 and VERSION_RE.match(parts[1]):
@@ -445,13 +469,13 @@ jobs:
               return "\n".join(out)
 
 
-          def cell(value):
+          def cell(value, limit=MAX_CELL_CHARS):
               """Render a value as a markdown table cell."""
               value = value.strip()
               if not value:
                   return "_(empty)_"
-              if len(value) > MAX_CELL_CHARS:
-                  value = value[: MAX_CELL_CHARS - 1] + "…"
+              if len(value) > limit:
+                  value = value[: limit - 1] + "…"
               fence = "`"
               while fence in value:
                   fence += "`"
@@ -459,19 +483,29 @@ jobs:
               return "{f}{p}{v}{p}{f}".format(f=fence, p=pad, v=value.replace("|", "\\|"))
 
 
+          TRUNCATION_NOTE = "\n... [{} more lines omitted to fit GitHub's comment size limit]"
+
+
           def truncate(text, limit):
-              """Trim text to a line boundary, saying how much was left out."""
+              """Trim text to a line boundary, saying how much was left out.
+
+              Never returns more than `limit` characters, including the note - callers
+              size the space around it, so an overshoot here becomes an overshoot in the
+              comment.
+              """
               if len(text) <= limit:
                   return text
-              shown = text[:limit]
+              keep = limit - len(TRUNCATION_NOTE.format(text.count("\n")))
+              if keep <= 0:
+                  return text[:limit]
+              shown = text[:keep]
               # A minified blob - a dashboard JSON on one line, say - can carry no
               # newline for the whole budget, and trimming back to one would then throw
               # away nearly everything. Only cut on a line boundary when one is close.
               trimmed = shown.rsplit("\n", 1)[0]
-              if len(trimmed) >= limit // 2:
+              if len(trimmed) >= keep // 2:
                   shown = trimmed
-              dropped = text.count("\n") - shown.count("\n")
-              return "{}\n... [{} more lines omitted to fit GitHub's comment size limit]".format(shown, dropped)
+              return shown + TRUNCATION_NOTE.format(text.count("\n") - shown.count("\n"))
 
 
           def label(identity):
@@ -482,30 +516,63 @@ jobs:
 
 
           def render_resource(identity, group, budget):
-              out = ["#### {} — {}".format(label(identity), group["status"]), ""]
+              """Render one resource within `budget` characters.
+
+              Everything here is sized against that budget, not just the diff block:
+              the table alone can run to thousands of characters, so leaving it out of
+              the arithmetic is what lets a block overshoot its share and get dropped
+              whole by the caller.
+              """
+              heading = "#### {} — {}".format(label(identity), group["status"])
+              out = [heading, ""]
+              used = len(heading) + 2
+
               if group["fields"]:
-                  out.append("| Field | Before | After |")
-                  out.append("| --- | --- | --- |")
+                  header = ["| Field | Before | After |", "| --- | --- | --- |"]
+                  out += header
+                  used += sum(len(line) + 1 for line in header)
+                  share = int(budget * FIELD_TABLE_SHARE) if group["blocks"] else budget
+                  shown = 0
                   for path, before, after in group["fields"][:MAX_FIELD_ROWS]:
-                      out.append("| {} | {} | {} |".format(cell(path), cell(before), cell(after)))
-                  dropped = len(group["fields"]) - MAX_FIELD_ROWS
+                      row = "| {} | {} | {} |".format(
+                          cell(path, MAX_PATH_CHARS), cell(before), cell(after)
+                      )
+                      # Always keep one row, so a resource is never listed with an empty
+                      # table.
+                      if shown and used + len(row) + 1 > share:
+                          break
+                      out.append(row)
+                      used += len(row) + 1
+                      shown += 1
                   out.append("")
-                  if dropped > 0:
-                      out.append("_…and {} more changed field(s)._".format(dropped))
-                      out.append("")
+                  used += 1
+                  dropped = len(group["fields"]) - shown
+                  if dropped:
+                      note = "_…and {} more changed field(s)._".format(dropped)
+                      out += [note, ""]
+                      used += len(note) + 2
+
               if group["blocks"]:
-                  body = "\n\n".join(render_block(path, details) for path, details in group["blocks"])
                   summary = "Show YAML" if group["status"] != MODIFIED else "Other changes"
-                  out += [
+                  wrapper = [
                       "<details><summary>{}</summary>".format(summary),
                       "",
                       "```diff",
-                      truncate(body, budget).replace("```", "` ` `"),
                       "```",
                       "",
                       "</details>",
                       "",
                   ]
+                  # Escape before measuring: turning ``` into ` ` ` grows the text, and
+                  # doing it afterwards would put it back over the limit.
+                  body = "\n\n".join(
+                      render_block(path, details) for path, details in group["blocks"]
+                  ).replace("```", "` ` `")
+                  room = budget - used - sum(len(line) + 1 for line in wrapper)
+                  if room >= MIN_BLOCK_CHARS:
+                      out += wrapper[:3] + [truncate(body, room)] + wrapper[3:]
+                  else:
+                      out += ["_Diff omitted to fit the comment size limit._", ""]
               return "\n".join(out)
 
 
@@ -514,27 +581,31 @@ jobs:
               for group in groups.values():
                   counts[group["status"]] += 1
               summary = ", ".join("{} {}".format(n, status) for status, n in counts.items() if n)
-              out = [
-                  "<details open><summary><code>{}</code> — {}</summary>".format(
-                      html.escape(display), summary
-                  ),
-                  "",
-              ]
+              heading = "<details open><summary><code>{}</code> — {}</summary>".format(
+                  html.escape(display), summary
+              )
+              out = [heading, ""]
+              used = len(heading) + 2 + len("</details>\n\n")
               if any(POSITIONAL_RE.match(identity) for identity in groups):
-                  out += [
+                  note = (
                       "> Listed by position, not by name: a document in this path has no "
                       "`metadata.name`, which turns off dyff's Kubernetes entity detection "
-                      "for the whole file.",
-                      "",
-                  ]
-              used = 0
+                      "for the whole file."
+                  )
+                  out += [note, ""]
+                  used += len(note) + 2
+
               for rendered, (identity, group) in enumerate(groups.items()):
                   left = len(groups) - rendered
-                  block = render_resource(identity, group, max(MIN_DIFF_CHARS, (budget - used) // left))
+                  share = max(MIN_RESOURCE_CHARS, (budget - used) // left)
+                  block = render_resource(identity, group, share)
                   # Always render one resource, so a changed path is never shown empty.
                   if rendered and used + len(block) > budget:
-                      out += ["_…and {} more changed resource(s), omitted to fit the comment "
-                              "size limit._".format(left), ""]
+                      out += [
+                          "_…and {} more changed resource(s), omitted to fit the comment "
+                          "size limit._".format(left),
+                          "",
+                      ]
                       break
                   out.append(block)
                   used += len(block)
@@ -550,7 +621,7 @@ jobs:
                       ),
                       "",
                       "```",
-                      truncate(message.strip(), MIN_DIFF_CHARS).replace("```", "` ` `"),
+                      truncate(message.strip().replace("```", "` ` `"), MIN_PATH_CHARS),
                       "```",
                       "",
                       "</details>",
@@ -596,7 +667,13 @@ jobs:
                   pr_path = pr_files[name] if pr_text.strip() else empty
                   code, stdout, stderr = run_dyff(base_path, pr_path)
                   if code != 0:
-                      changed.append((name, None, stderr or stdout or "dyff exited {}".format(code)))
+                      # dyff names the file it choked on, which on a runner is an
+                      # absolute path into a downloaded artifact - somewhere the reader
+                      # cannot go and look. Point at the kustomize path instead.
+                      failure = stderr or stdout or "dyff exited {}".format(code)
+                      for path in (base_path, pr_path):
+                          failure = failure.replace(path, name)
+                      changed.append((name, None, failure))
                       continue
                   entries = parse_report(stdout)
                   if entries:
@@ -659,18 +736,21 @@ jobs:
                   for container, before, after in group["images"]
               ]
               head = render_head(changed, total, images)
-              # Reserve for the head, for the note the body may add to it, and for a
-              # one-line entry per path in case none of them fit.
-              available = max(
-                  0,
-                  MAX_COMMENT_CHARS - len("\n".join(head)) - 200 - ONE_LINE_CHARS * len(changed),
-              )
+
+              def assemble(blocks):
+                  return "\n".join(head) + "\n\n" + "\n".join(blocks)
+
+              # Reserve for the head, for the note the body may add to it, and for the
+              # line every path falls back to - sized from the real path names, since a
+              # deep overlay path is most of that line's length.
+              reserve = sum(len(display) + ONE_LINE_CHARS for display, _, _ in changed)
+              available = max(0, MAX_COMMENT_CHARS - len("\n".join(head)) - 200 - reserve)
 
               body = []
               used = 0
               omitted = 0
               if changed:
-                  budget = max(MIN_DIFF_CHARS, available // len(changed) - PATH_OVERHEAD_CHARS)
+                  budget = max(MIN_PATH_CHARS, available // len(changed) - PATH_OVERHEAD_CHARS)
                   for display, groups, failure in changed:
                       block = render_failure(display, failure) if failure else render_path(display, groups, budget)
                       if used + len(block) > available:
@@ -684,13 +764,14 @@ jobs:
                       "> {} path(s) are listed without a diff to keep this comment under "
                       "GitHub's 65,536-character limit.".format(omitted),
                   ]
-              comment = "\n".join(head) + "\n\n" + "\n".join(body)
-              # Every path is budgeted above, so this should never fire - but the comment
-              # being silently truncated by GitHub is the one outcome worth ruling out
-              # unconditionally.
-              if len(comment) > MAX_COMMENT_CHARS:
-                  comment = truncate(comment, MAX_COMMENT_CHARS)
-              return comment
+
+              # Every path is budgeted above, so this should never fire. Drop whole
+              # blocks rather than cutting into one: a cut inside a <details> or a fenced
+              # block would swallow everything after it in GitHub's renderer.
+              while len(body) > 1 and len(assemble(body)) > MAX_COMMENT_CHARS:
+                  body.pop()
+              comment = assemble(body)
+              return comment if len(comment) <= MAX_COMMENT_CHARS else comment[:MAX_COMMENT_CHARS]
 
 
           def main():
