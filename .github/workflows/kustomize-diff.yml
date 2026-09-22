@@ -587,14 +587,20 @@ jobs:
               changed = []
               names = sorted(set(base_files) | set(pr_files))
               for name in names:
-                  base_path, pr_path = base_files.get(name), pr_files.get(name)
-                  code, stdout, stderr = run_dyff(base_path or empty, pr_path or empty)
+                  base_text, pr_text = read(base_files.get(name)), read(pr_files.get(name))
+                  # An overlay can legitimately build to nothing, and a zero-byte file
+                  # parses as one *empty* document rather than as none - which makes dyff
+                  # either report the other side as a modified root level or refuse the
+                  # comparison outright. The separator-only placeholder does neither.
+                  base_path = base_files[name] if base_text.strip() else empty
+                  pr_path = pr_files[name] if pr_text.strip() else empty
+                  code, stdout, stderr = run_dyff(base_path, pr_path)
                   if code != 0:
                       changed.append((name, None, stderr or stdout or "dyff exited {}".format(code)))
                       continue
                   entries = parse_report(stdout)
                   if entries:
-                      changed.append((name, group_by_resource(entries, read(base_path), read(pr_path)), None))
+                      changed.append((name, group_by_resource(entries, base_text, pr_text), None))
               return changed, len(names)
 
 
