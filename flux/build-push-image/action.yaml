@@ -30,7 +30,7 @@ runs:
   using: composite
   steps:
     - name: Prepare Job for Pushing OCI Artifacts to Azure Container Registry
-      uses: dis-way/actions/flux/setup-flux-acr@8a0034943836baaa34c7e220854f950ce3a5f370 # main
+      uses: dis-way/actions/flux/setup-flux-acr@6dfbe1b556885fb15d86b2dc5de9c90d4765ae24 # main
       with:
         azure_app_id: ${{ inputs.azure_app_id }}
         azure_subscription_id: ${{ inputs.azure_subscription_id }}
