@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: storefront-prod
+
+resources:
+  - ../../base
+  - hpa.yaml
+
+images:
+  - name: ghcr.io/dis-way/storefront
+    newTag: v1.4.0
+
+replicas:
+  - name: storefront
+    count: 3
+
+patches:
+  - target:
+      kind: Deployment
+      name: storefront
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m

@@ -1,0 +1,48 @@
+# Exercises the kustomize-diff reusable workflow against the throwaway
+# manifests in examples/kustomize-diff, so a change to either one gets a real
+# comment on its own pull request. Delete this together with those manifests
+# once the workflow no longer needs a live demo.
+name: Kustomize Diff Example
+
+on:
+  pull_request:
+    paths:
+      - examples/kustomize-diff/**
+      - .github/workflows/kustomize-diff.yml
+      - .github/workflows/kustomize-diff-example.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: Diff the example overlays
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/kustomize-diff.yml
+    with:
+      build-paths: examples/kustomize-diff/overlays/*
+
+  # The reusable workflow's only output. Consuming it here keeps the contract
+  # covered: a renderer change that stopped writing has_changes would otherwise
+  # go unnoticed until a caller's deployment gate silently stopped firing.
+  check-output:
+    name: Check has-changes output
+    needs: diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert has-changes is set to a boolean
+        env:
+          HAS_CHANGES: ${{ needs.diff.outputs.has-changes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "has-changes=${HAS_CHANGES}"
+          # Either value is legitimate - a pull request touching only the
+          # workflow leaves the overlays identical - but an empty value means
+          # the renderer stopped writing the output the callers gate on.
+          case "${HAS_CHANGES}" in
+            true|false) ;;
+            *) echo "has-changes was not set by the reusable workflow."; exit 1 ;;
+          esac
