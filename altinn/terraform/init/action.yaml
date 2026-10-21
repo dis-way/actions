@@ -1,0 +1,151 @@
+name: Terraform Init
+description: Setup Terraform
+inputs:
+  working_directory:
+    description: The directory where the Terraform project is located.
+    default: ./infrastructure
+    required: true
+
+  oidc_type:
+    description: Specifies a part of subject for OpenID Connect (OIDC), can be values 'branch' or 'environment'
+    required: true
+  oidc_value:
+    description: Name of branch or environment
+    required: true
+
+  arm_client_id:
+    required: true
+    description: Federated Azure Client ID.
+  arm_subscription_id:
+    required: true
+    description: Azure Subscription ID
+  arm_tenant_id:
+    required: false
+    description: Azure Tenant ID
+    default: cd0026d8-283b-4a55-9bfa-d0ef4a8ba21c
+
+  tf_arm_subscription_id:
+    required: false
+    default: d43d5057-8389-40d5-88c4-04db9275cbf2
+    description: Azure Subscription ID for the storage account that persists the terraform state
+  tf_arm_resource_group_name:
+    required: false
+    description: Azure resource group for the storage account that persists the terraform state
+    default: terraform-rg
+  tf_arm_storage_account_name:
+    required: false
+    description: Name of the azure storage account that persists the terraform state
+    default: altinnterraformstorage02
+  tf_state_name:
+    description: Name of Terraform state file
+    required: true
+  tf_version:
+    required: false
+    description: Terraform Version
+    # renovate: datasource=github-releases depName=terraform packageName=hashicorp/terraform versioning=semver
+    default: 1.15.6
+  tf_log_level:
+    required: false
+    description: Terraform Log level
+    default: INFO
+
+outputs:
+  init_step_stdout:
+    description: "steps.init.outputs.stdout"
+    value: ${{ steps.init.outputs.stdout }}
+  init_step_outcome:
+    description: "steps.init.outcome"
+    value: ${{ steps.init.outcome }}
+
+  fmt_step_stdout:
+    description: "steps.fmt.outputs.stdout"
+    value: ${{ steps.fmt.outputs.stdout }}
+  fmt_step_outcome:
+    description: "steps.fmt.outcome"
+    value: ${{ steps.fmt.outcome }}
+
+  validate_step_stdout:
+    description: "steps.validate.outputs.stdout"
+    value: ${{ steps.validate.outputs.stdout }}
+  validate_step_outcome:
+    description: "steps.validate.outcome"
+    value: ${{ steps.validate.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform Install
+      id: install
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+      with:
+        terraform_version: ${{ inputs.tf_version }}
+        terraform_wrapper: true
+
+    - name: Terraform Set Logger
+      id: logger
+      shell: bash
+      env:
+        TERRAFORM_LOG_LEVEL: ${{ inputs.tf_log_level }}
+      run: |
+        SAFE_TERRAFORM_LOG_LEVEL=$(echo "${TERRAFORM_LOG_LEVEL:-INFO}" | tr -d '\n')
+        echo "TF_LOG=$SAFE_TERRAFORM_LOG_LEVEL" >> "$GITHUB_ENV"
+
+    - name: Terraform Set State File Path
+      id: state_file_path_tmp
+      shell: bash
+      env:
+        OIDC_TYPE: ${{ inputs.oidc_type }}
+        OIDC_VALUE: ${{ inputs.oidc_value }}
+        TERRAFORM_STATE_NAME: ${{ inputs.tf_state_name }}
+      run: |
+        if [ "$OIDC_TYPE" = "environment" ]; then
+          TYPE="environments"
+        else
+          TYPE="branches"
+        fi
+        echo "TF_STATE_FILE_TMP=github.com/${GITHUB_REPOSITORY}/${TYPE}/${OIDC_VALUE}/$TERRAFORM_STATE_NAME" >> $GITHUB_ENV
+
+    - name: Terraform Set State File Path Lower
+      id: state_file_path
+      shell: bash
+      env:
+        TMP_TERRAFORM_STATE_FILE: ${{ env.TF_STATE_FILE_TMP }}
+      run: |
+        echo "TF_STATE_FILE=$(echo $TMP_TERRAFORM_STATE_FILE | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+    - name: Terraform Format
+      id: fmt
+      shell: bash
+      if: always()
+      working-directory: ${{ inputs.working_directory }}
+      run: terraform fmt -check
+
+    - name: Terraform Init
+      id: init
+      shell: bash
+      if: always()
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+        ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.tf_arm_subscription_id }}
+        TERRAFORM_STATE_FILE: ${{ env.TF_STATE_FILE }}
+        TERRAFORM_STORAGE_ACCOUNT_NAME: ${{ inputs.tf_arm_storage_account_name }}
+        TERRAFORM_RESOURCE_GROUP_NAME: ${{ inputs.tf_arm_resource_group_name }}
+      run: |
+        terraform init -input=false \
+          -backend-config="use_oidc=true" \
+          -backend-config="use_azuread_auth=true" \
+          -backend-config="resource_group_name=$TERRAFORM_RESOURCE_GROUP_NAME" \
+          -backend-config="storage_account_name=$TERRAFORM_STORAGE_ACCOUNT_NAME" \
+          -backend-config="container_name=tfstates" \
+          -backend-config="key=$TERRAFORM_STATE_FILE"
+
+    - name: Terraform Validate
+      id: validate
+      shell: bash
+      if: always()
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        terraform version
+        terraform validate -no-color
